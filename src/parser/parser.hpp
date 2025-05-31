@@ -1,7 +1,7 @@
 #ifndef PARSER_HPP
 #define PARSER_HPP
 
-#include "data_structure.hpp"
+#include "../data_structure/data_structure.hpp"
 #include <string>
 #include <fstream>
 #include <iostream>
