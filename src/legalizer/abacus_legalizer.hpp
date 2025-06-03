@@ -5,6 +5,7 @@
 #include "../legalizer/place_row.hpp"
 #include <vector>
 #include <limits>
+#include <algorithm>
 
 class AbacusLegalizer {
 public:
@@ -35,10 +36,10 @@ private:
     
     // Restore original cell positions for cells in a sub-row
     void restore_sub_row_cells(SubRow* sub_row, std::vector<Cell>& cells,
-                              const std::vector< std::pair<double, double> >& original_positions);
+                              const std::vector<std::pair<double, double>>& original_positions);
     
     // Save current positions of cells in a sub-row
-    std::vector< std::pair<double, double> > save_sub_row_positions(const SubRow* sub_row, 
+    std::vector<std::pair<double, double>> save_sub_row_positions(const SubRow* sub_row, 
                                                                   const std::vector<Cell>& cells);
 };
 

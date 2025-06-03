@@ -1,5 +1,5 @@
 CXX      := g++
-CXXFLAGS := -std=c++17 -O3 -Wall -Wextra -MMD
+CXXFLAGS := -std=c++17 -g -O0 -Wall -Wextra -MMD
 LIBS     := -lm
 EXEC     := ../bin/hw5
 SRC_DIRS := .\
@@ -23,6 +23,9 @@ $(EXEC): $(OBJS)
 clean:
 	rm -rf $(EXEC) $(OBJS) $(DEPS)
 
+debug: CXXFLAGS += -DDEBUG
+debug: $(EXEC)
+
 ifeq (test, $(firstword $(MAKECMDGOALS)))
   TESTCASE := $(word 2, $(MAKECMDGOALS))
   $(eval $(TESTCASE):;@:)
@@ -32,5 +35,5 @@ test: $(EXEC)
 	@echo Testing with $(TESTCASE) 
 	./$(EXEC) ../testcase/$(TESTCASE).txt ../output/$(TESTCASE).out 
 
-.PHONY: all clean test
+.PHONY: all clean debug test
 -include $(DEPS)

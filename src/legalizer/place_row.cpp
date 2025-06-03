@@ -161,6 +161,9 @@ double PlaceRow::calculate_cluster_optimal_x(const Cluster& cluster,
 double PlaceRow::get_site_aligned_position(double x, double sub_row_start_x, int site_width) {
     // Apply site alignment using floor (as per alg.md Phase 4)
     double relative_x = x - sub_row_start_x;
+    if (relative_x < 0) {
+        return sub_row_start_x;  // Clamp to sub-row start
+    }
     int site_offset = static_cast<int>(std::floor(relative_x / site_width));
     return sub_row_start_x + site_offset * site_width;
 }
@@ -190,16 +193,15 @@ bool PlaceRow::apply_site_alignment(std::vector<Cluster>& clusters, SubRow* sub_
     // Check for overlaps after site alignment and resolve if necessary
     for (int i = 1; i < static_cast<int>(clusters.size()); ++i) {
         double prev_end = clusters[i-1].optimal_x + clusters[i-1].total_width;
-        // Use epsilon for floating point comparison
-        if (prev_end > clusters[i].optimal_x + EPSILON) {
-            // Push current cluster to next site boundary
-            double min_x = prev_end;
-            clusters[i].optimal_x = get_site_aligned_position(min_x, sub_row->start_x, sub_row->site_width);
-            
-            // If aligned position is still overlapping, push to next site
-            if (clusters[i].optimal_x < min_x - EPSILON) {
-                clusters[i].optimal_x += sub_row->site_width;
-            }
+        
+        // Calculate the next available site after the previous cluster ends
+        // If prev cluster ends at 1.5, next cluster must start at site 2 (not site 1)
+        double next_available_site_offset = std::ceil((prev_end - sub_row->start_x) / sub_row->site_width);
+        double next_available_x = sub_row->start_x + next_available_site_offset * sub_row->site_width;
+        
+        // If current cluster position is before the next available site, move it
+        if (clusters[i].optimal_x < next_available_x - EPSILON) {
+            clusters[i].optimal_x = next_available_x;
             
             // Check if pushed cluster still fits in sub-row
             if (clusters[i].optimal_x + clusters[i].total_width > sub_row->end_x + EPSILON) {

@@ -40,7 +40,7 @@ private:
     
     static bool check_max_displacement_constraint_with_positions(const std::vector<int>& cell_indices,
                                                                const std::vector<Cell>& cells,
-                                                               const std::vector<std::pair<double, double>>& positions,
+                                                               const std::vector< std::pair<double, double> >& positions,
                                                                double max_displacement_constraint);
     
     static bool check_row_boundary_constraint(const std::vector<Cluster>& clusters,
