@@ -1,47 +1,41 @@
-// abacus_legalizer.hpp - Modified version
 #ifndef ABACUS_LEGALIZER_HPP
 #define ABACUS_LEGALIZER_HPP
 
 #include "../data_structure/data_structure.hpp"
-#include "../legalizer/place_row.hpp"
+#include "place_row.hpp" // Ensure this is the new place_row.hpp
 #include <vector>
 #include <limits>
 #include <algorithm>
 
 class AbacusLegalizer {
 public:
-    // Main legalization function
     bool legalize(PlacementData& data);
 
 private:
-    // Sort cells by their original x position
     std::vector<int> sort_cells_by_x(const std::vector<Cell>& cells, bool ascending = true);
+    int find_nearest_row_idx(const Cell& cell, const PlacementData& data);
     
-    // Find the nearest row to a cell
-    int find_nearest_row(const Cell& cell, const PlacementData& data);
+    // Tries to place cell_index into sub_row using PlaceRow::place_row_trial
+    PlacementTrialResult try_place_cell_in_sub_row_trial(
+        const SubRow* sub_row,
+        int cell_idx,
+        const PlacementData& placement_data,
+        bool check_penalty_for_all_cluster_cells);
+
+    // Finds the best sub-row within a given row for a cell
+    std::pair<SubRow*, PlacementTrialResult> find_best_sub_row_in_row(
+        int cell_idx, 
+        int row_idx, 
+        PlacementData& placement_data, // Not const, as subrow might be modified in trial if not careful (but shouldn't)
+                                       // Making it const to enforce no modification in trial search
+        const PlacementData& const_placement_data, // For trial calls
+        double current_best_overall_cost,
+        bool check_penalty_for_all_cluster_cells);
     
-    // Calculate lower bound cost for placing a cell in a sub-row (vertical movement only)
-    double calculate_lower_bound_cost(const Cell& cell, const SubRow& sub_row);
-    
-    // Try to place a cell in a specific sub-row using trial mode
-    PlacementResult try_place_cell_trial(int cell_index, SubRow* sub_row, 
-                                       const PlacementData& data, 
-                                       double current_best_cost,
-                                       bool add_penalty = true);  // Added add_penalty parameter
-    
-    // Apply site alignment to all cells after placement
-    void apply_site_alignment_all(PlacementData& data);
-    
-    // Get the index of a sub-row in the all_sub_rows vector
-    int get_sub_row_index(SubRow* sub_row, const PlacementData& data);
-    
-    // Get sub-rows for a specific row
-    std::vector<SubRow*> get_sub_rows_for_row(const PlacementData& data, int row_idx);
-    
-    // Find best sub-row within a row
-    std::pair<SubRow*, PlacementResult> find_best_sub_row_in_row(
-        int cell_idx, int row_idx, const PlacementData& data, 
-        double current_best_cost, bool add_penalty);
+    // Applies site alignment to all cells in all sub-rows.
+    // This might be redundant if place_row_final's determine_and_apply_final_positions handles it.
+    // Kept for now as a final sweep if needed.
+    void apply_site_alignment_to_all_subrows(PlacementData& data);
 };
 
 #endif // ABACUS_LEGALIZER_HPP

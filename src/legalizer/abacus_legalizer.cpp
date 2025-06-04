@@ -1,314 +1,256 @@
-// abacus_legalizer.cpp - Modified version with speed-up tricks
 #include "abacus_legalizer.hpp"
 #include <algorithm>
 #include <cmath>
-#include <iostream>
+#include <iostream> // For debugging
 
 bool AbacusLegalizer::legalize(PlacementData& data) {
     std::cout << "\n===== Starting Abacus Legalization =====" << std::endl;
-    
-    // Try both ascending and descending order (Speed-up trick #3)
-    PlacementData best_data = data;
-    bool found_valid_solution = false;
+    data.initialize_sub_row_pointers(); // Ensure sub-row pointers and cell IDs are set
+
+    PlacementData best_data_so_far = data; // Store initial state
     double best_total_displacement = std::numeric_limits<double>::infinity();
-    int max_dir = 0;
-    if (data.cells.size() > 80000) {
-        max_dir = 1;  // Only try descending for large datasets
-    }
-    
-    for (int sort_dir = 0; sort_dir < max_dir; ++sort_dir) {  // Changed from < 1 to < 2
-        std::cout << "\n--- Trying sort direction: " << (sort_dir == 0 ? "ascending" : "descending") << " ---" << std::endl;
-        
-        PlacementData current_data = data;
-        bool success = true;
-        
-        // Sort cells by x coordinate
-        std::vector<int> cell_order = sort_cells_by_x(current_data.cells, sort_dir == 0);
-        
-        // Legalize each cell one by one
-        for (int i = 0; i < static_cast<int>(cell_order.size()); ++i) {
-            int cell_idx = cell_order[i];
-            
-            double best_cost = std::numeric_limits<double>::infinity();
-            int best_sub_row_idx = -1;
-            SubRow* best_sub_row = nullptr;
-            PlacementResult best_result;
-            
-            // Speed-up trick #1: Row Search Pruning
-            // Find nearest row based on Y coordinate
-            int base_row_idx = find_nearest_row(current_data.cells[cell_idx], current_data);
-            bool found_valid_placement = false;
-            
-            // Try with penalty first, then without if needed
-            for (int add_penalty = 1; add_penalty >= 0; --add_penalty) {
-                // Search upward from base row
-                for (int row_idx = base_row_idx; row_idx >= 0; --row_idx) {
-                    // Calculate lower bound (vertical distance only)
-                    double vertical_distance = std::abs(current_data.cells[cell_idx].original_y - 
-                                                      current_data.rows[row_idx].y);
-                    
-                    // Pruning: if vertical distance alone exceeds best cost, stop searching upward
-                    if (vertical_distance >= best_cost) {
-                        break;
-                    }
-                    
-                    // Try sub-rows in this row
-                    auto [sub_row, result] = find_best_sub_row_in_row(
-                        cell_idx, row_idx, current_data, best_cost, add_penalty);
-                    
-                    if (result.valid && result.cost < best_cost) {
-                        best_cost = result.cost;
-                        best_sub_row = sub_row;
-                        best_result = result;
-                        found_valid_placement = true;
-                    }
-                }
-                
-                // Search downward from base row
-                for (int row_idx = base_row_idx + 1; row_idx < static_cast<int>(current_data.rows.size()); ++row_idx) {
-                    // Calculate lower bound (vertical distance only)
-                    double vertical_distance = std::abs(current_data.cells[cell_idx].original_y - 
-                                                      current_data.rows[row_idx].y);
-                    
-                    // Pruning: if vertical distance alone exceeds best cost, stop searching downward
-                    if (vertical_distance >= best_cost) {
-                        break;
-                    }
-                    
-                    // Try sub-rows in this row
-                    auto [sub_row, result] = find_best_sub_row_in_row(
-                        cell_idx, row_idx, current_data, best_cost, add_penalty);
-                    
-                    if (result.valid && result.cost < best_cost) {
-                        best_cost = result.cost;
-                        best_sub_row = sub_row;
-                        best_result = result;
-                        found_valid_placement = true;
-                    }
-                }
-                
-                // If found valid placement with penalty, no need to try without
-                if (found_valid_placement) {
-                    break;
-                }
+    bool found_at_least_one_solution = false;
+
+    int num_sort_directions = 1; // Default to ascending only
+     if (data.cells.size() <= 80000) { // Try both for smaller, or always for now
+        num_sort_directions = 2;
+     }
+
+
+    for (int sort_direction_mode = 0; sort_direction_mode < num_sort_directions; ++sort_direction_mode) {
+        PlacementData current_run_data = data; // Reset to original data for each sort direction
+        // Reset subrow states (clusters and cell lists) for the new run
+        for(auto& row : current_run_data.rows){
+            for(auto& sr : row.sub_rows){
+                sr.cells.clear();
+                sr.last_cluster = nullptr;
             }
-            
-            // Place cell in best sub-row (if found)
-            if (found_valid_placement && best_sub_row) {
-                best_sub_row->add_cell(cell_idx, current_data.cells);
-                PlaceRow::place_row_final(best_sub_row, best_result, current_data.cells);
-                current_data.cells[cell_idx].is_legalized = true;
+        }
+
+
+        bool sort_ascending = (sort_direction_mode == 0);
+        std::cout << "\n--- Trying sort direction: " << (sort_ascending ? "ascending" : "descending") << " ---" << std::endl;
+
+        std::vector<int> cell_processing_order = sort_cells_by_x(current_run_data.cells, sort_ascending);
+        bool current_run_successful = true;
+
+        for (int cell_idx_in_order : cell_processing_order) {
+            const Cell& cell_to_place = current_run_data.cells[cell_idx_in_order];
+            if(cell_to_place.is_legalized) continue; // Should not happen if data is reset properly
+
+            double best_cost_for_this_cell = std::numeric_limits<double>::infinity();
+            SubRow* best_sub_row_for_this_cell = nullptr;
+            // PlacementTrialResult best_trial_result_for_this_cell; // Not strictly needed to store full result here
+
+            int nearest_row_original_idx = find_nearest_row_idx(cell_to_place, current_run_data);
+            bool found_placement_for_this_cell = false;
+
+            for (int penalty_check_mode = 1; penalty_check_mode >= 0; --penalty_check_mode) {
+                bool check_penalty_flag = (penalty_check_mode == 1);
+
+                // Search upwards from nearest row (including nearest)
+                for (int r_idx = nearest_row_original_idx; r_idx >= 0; --r_idx) {
+                    double vertical_dist = std::abs(static_cast<double>(current_run_data.rows[r_idx].y) - cell_to_place.original_y);
+                    if (vertical_dist >= best_cost_for_this_cell && best_cost_for_this_cell != std::numeric_limits<double>::infinity()) {
+                        break; 
+                    }
+                    for (size_t sr_loop_idx = 0; sr_loop_idx < current_run_data.rows[r_idx].sub_rows.size(); ++sr_loop_idx) {
+                        SubRow* current_sub_row = &current_run_data.rows[r_idx].sub_rows[sr_loop_idx];
+                         if (static_cast<double>(cell_to_place.width) > (current_sub_row->end_x - current_sub_row->start_x) + PlaceRow::EPSILON) continue;
+
+
+                        PlacementTrialResult trial_res = PlaceRow::place_row_trial(current_sub_row, cell_idx_in_order, current_run_data, current_run_data.max_displacement_constraint, check_penalty_flag);
+                        if (trial_res.valid && trial_res.cost < best_cost_for_this_cell) {
+                            best_cost_for_this_cell = trial_res.cost;
+                            best_sub_row_for_this_cell = current_sub_row;
+                            found_placement_for_this_cell = true;
+                        }
+                    }
+                }
+
+                // Search downwards from nearest row (excluding nearest if already checked)
+                for (int r_idx = nearest_row_original_idx + 1; r_idx < static_cast<int>(current_run_data.rows.size()); ++r_idx) {
+                    double vertical_dist = std::abs(static_cast<double>(current_run_data.rows[r_idx].y) - cell_to_place.original_y);
+                     if (vertical_dist >= best_cost_for_this_cell && best_cost_for_this_cell != std::numeric_limits<double>::infinity()) {
+                        break;
+                    }
+                     for (size_t sr_loop_idx = 0; sr_loop_idx < current_run_data.rows[r_idx].sub_rows.size(); ++sr_loop_idx) {
+                        SubRow* current_sub_row = &current_run_data.rows[r_idx].sub_rows[sr_loop_idx];
+                        if (static_cast<double>(cell_to_place.width) > (current_sub_row->end_x - current_sub_row->start_x) + PlaceRow::EPSILON) continue;
+
+                        PlacementTrialResult trial_res = PlaceRow::place_row_trial(current_sub_row, cell_idx_in_order, current_run_data, current_run_data.max_displacement_constraint, check_penalty_flag);
+                        if (trial_res.valid && trial_res.cost < best_cost_for_this_cell) {
+                            best_cost_for_this_cell = trial_res.cost;
+                            best_sub_row_for_this_cell = current_sub_row;
+                            found_placement_for_this_cell = true;
+                        }
+                    }
+                }
+                if (found_placement_for_this_cell) break; // Found with this penalty mode
+            }
+
+
+            if (best_sub_row_for_this_cell) {
+                PlaceRow::place_row_final(best_sub_row_for_this_cell, cell_idx_in_order, current_run_data);
+                current_run_data.cells[cell_idx_in_order].is_legalized = true;
             } else {
-                success = false;
-                break;
+                std::cerr << "Error: Could not find valid placement for cell " << cell_to_place.name << std::endl;
+                current_run_successful = false;
+                break; 
             }
         }
-        
-        if (success) {
-            std::cout << "\nApplying site alignment..." << std::endl;
-            apply_site_alignment_all(current_data);
-            
-            double total_disp = current_data.calculate_total_displacement();
-            
-            if (total_disp < best_total_displacement) {
-                best_total_displacement = total_disp;
-                best_data = current_data;
-                found_valid_solution = true;
+
+        if (current_run_successful) {
+            // apply_site_alignment_to_all_subrows(current_run_data); // Done by place_row_final now
+            double current_total_disp = current_run_data.calculate_total_displacement();
+            std::cout << "Sort direction " << (sort_ascending ? "ascending" : "descending") 
+                      << " total displacement: " << current_total_disp << std::endl;
+            if (current_total_disp < best_total_displacement) {
+                best_total_displacement = current_total_disp;
+                best_data_so_far = current_run_data;
+                found_at_least_one_solution = true;
             }
         }
     }
     
-    if (!found_valid_solution) {
+    if (!found_at_least_one_solution) {
+         std::cerr << "Error: No valid solution found after all attempts." << std::endl;
         return false;
     }
-    
-    data = best_data;
+
+    data = best_data_so_far; // Commit the best result found
+    std::cout << "\n===== Abacus Legalization Finished =====" << std::endl;
+    std::cout << "Best total displacement: " << data.calculate_total_displacement() << std::endl;
+    std::cout << "Max displacement: " << data.calculate_max_displacement() << std::endl;
+
     return true;
 }
 
-std::pair<SubRow*, PlacementResult> AbacusLegalizer::find_best_sub_row_in_row(
-    int cell_idx, int row_idx, const PlacementData& data, 
-    double current_best_cost, bool add_penalty) {
-    
-    SubRow* best_sub_row = nullptr;
-    PlacementResult best_result;
-    best_result.valid = false;
-    best_result.cost = std::numeric_limits<double>::infinity();
-    
-    // Get sub-rows for this row
-    std::vector<SubRow*> sub_rows = get_sub_rows_for_row(data, row_idx);
-    
-    // Sort sub-rows by their distance to cell's x position for better pruning
-    const Cell& cell = data.cells[cell_idx];
-    std::sort(sub_rows.begin(), sub_rows.end(), 
-        [&cell](SubRow* a, SubRow* b) {
-            double dist_a = 0;
-            if (cell.original_x < a->start_x) {
-                dist_a = a->start_x - cell.original_x;
-            } else if (cell.original_x > a->end_x) {
-                dist_a = cell.original_x - a->end_x;
-            }
-            
-            double dist_b = 0;
-            if (cell.original_x < b->start_x) {
-                dist_b = b->start_x - cell.original_x;
-            } else if (cell.original_x > b->end_x) {
-                dist_b = cell.original_x - b->end_x;
-            }
-            
-            return dist_a < dist_b;
-        });
-    
-    // Try each sub-row
-    for (SubRow* sub_row : sub_rows) {
-        PlacementResult result = try_place_cell_trial(cell_idx, sub_row, data, 
-                                                     current_best_cost, add_penalty);
-        
-        if (result.valid && result.cost < best_result.cost) {
-            best_result = result;
-            best_sub_row = sub_row;
-        }
-    }
-    
-    return {best_sub_row, best_result};
-}
-
-std::vector<SubRow*> AbacusLegalizer::get_sub_rows_for_row(const PlacementData& data, int row_idx) {
-    std::vector<SubRow*> sub_rows;
-    if (row_idx >= 0 && row_idx < static_cast<int>(data.rows.size())) {
-        for (auto& sub_row : data.rows[row_idx].sub_rows) {
-            sub_rows.push_back(const_cast<SubRow*>(&sub_row));
-        }
-    }
-    return sub_rows;
-}
-
-PlacementResult AbacusLegalizer::try_place_cell_trial(int cell_index, SubRow* sub_row,
-                                                     const PlacementData& data, 
-                                                     double current_best_cost,
-                                                     bool add_penalty) {
-    PlacementResult result;
-    result.valid = false;
-    result.cost = std::numeric_limits<double>::infinity();
-    
-    // Check if cell width can fit in sub-row considering site alignment
-    int cell_sites_needed = static_cast<int>(std::ceil(static_cast<double>(data.cells[cell_index].width) / 
-                                                       sub_row->site_width));
-    
-    // Calculate current used sites
-    int used_sites = 0;
-    for (int idx : sub_row->cells) {
-        int sites = static_cast<int>(std::ceil(static_cast<double>(data.cells[idx].width) / 
-                                               sub_row->site_width));
-        used_sites += sites;
-    }
-    
-    int available_sites = static_cast<int>((sub_row->end_x - sub_row->start_x) / sub_row->site_width);
-    int remaining_sites = available_sites - used_sites;
-    
-    // Check if cell can fit in terms of sites
-    if (cell_sites_needed > remaining_sites) {
-        return result;
-    }
-    
-    // Use trial mode of PlaceRow with add_penalty parameter
-    result = PlaceRow::place_row_trial(sub_row, cell_index, data.cells, 
-                                     data.max_displacement_constraint, add_penalty);
-    
-    return result;
-}
-
-int AbacusLegalizer::find_nearest_row(const Cell& cell, const PlacementData& data) {
-    int nearest_row = 0;
-    double min_distance = std::numeric_limits<double>::infinity();
-    
-    for (int i = 0; i < static_cast<int>(data.rows.size()); ++i) {
-        double distance = std::abs(data.rows[i].y - cell.original_y);
-        if (distance < min_distance) {
-            min_distance = distance;
-            nearest_row = i;
-        }
-    }
-    
-    return nearest_row;
-}
-
-void AbacusLegalizer::apply_site_alignment_all(PlacementData& data) {
-    // Apply site alignment to all cells after placement
-    for (auto& row : data.rows) {
-        for (auto& sub_row : row.sub_rows) {
-            if (sub_row.cells.empty()) continue;
-            
-            // Sort cells by current x position
-            std::vector<int> cell_indices = sub_row.cells;
-            std::sort(cell_indices.begin(), cell_indices.end(),
-                      [&data](int a, int b) {
-                          return data.cells[a].current_x < data.cells[b].current_x;
-                      });
-            
-            // Apply site alignment
-            for (int i = 0; i < static_cast<int>(cell_indices.size()); ++i) {
-                int cell_idx = cell_indices[i];
-                Cell& cell = data.cells[cell_idx];
-                
-                // Align to site boundary  
-                double relative_x = cell.current_x - sub_row.start_x;
-                int site_offset = static_cast<int>(std::round(relative_x / sub_row.site_width));
-                double new_x = sub_row.start_x + site_offset * sub_row.site_width;
-                
-                cell.current_x = new_x;
-            }
-            
-            // Fix any overlaps caused by site alignment
-            for (int i = 1; i < static_cast<int>(cell_indices.size()); ++i) {
-                Cell& prev_cell = data.cells[cell_indices[i-1]];
-                Cell& curr_cell = data.cells[cell_indices[i]];
-                
-                double prev_end = prev_cell.current_x + prev_cell.width;
-                if (prev_end > curr_cell.current_x + PlaceRow::EPSILON) {
-                    // Move current cell to next available site
-                    double required_start = prev_end;
-                    double relative_x = required_start - sub_row.start_x;
-                    int site_offset = static_cast<int>(std::ceil(relative_x / sub_row.site_width));
-                    double new_x = sub_row.start_x + site_offset * sub_row.site_width;
-                    
-                    curr_cell.current_x = new_x;
-                }
-            }
-        }
-    }
-}
-
-int AbacusLegalizer::get_sub_row_index(SubRow* sub_row, const PlacementData& data) {
-    for (int i = 0; i < static_cast<int>(data.all_sub_rows.size()); ++i) {
-        if (data.all_sub_rows[i] == sub_row) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-double AbacusLegalizer::calculate_lower_bound_cost(const Cell& cell, const SubRow& sub_row) {
-    return std::abs(sub_row.y - cell.original_y);
-}
 
 std::vector<int> AbacusLegalizer::sort_cells_by_x(const std::vector<Cell>& cells, bool ascending) {
     std::vector<int> indices(cells.size());
-    for (int i = 0; i < static_cast<int>(cells.size()); ++i) {
-        indices[i] = i;
+    for (size_t i = 0; i < cells.size(); ++i) {
+        indices[i] = i; // Store original index
     }
-    
-    if (ascending) {
-        std::sort(indices.begin(), indices.end(),
-                  [&cells](int a, int b) {
-                      return cells[a].original_x < cells[b].original_x;
-                  });
-    } else {
-        std::sort(indices.begin(), indices.end(),
-                  [&cells](int a, int b) {
-                      return cells[a].original_x > cells[b].original_x;
-                  });
-    }
-    
+
+    std::sort(indices.begin(), indices.end(),
+              [&cells, ascending](int a_idx, int b_idx) {
+                  if (ascending) {
+                      return cells[a_idx].original_x < cells[b_idx].original_x;
+                  } else {
+                      return cells[a_idx].original_x > cells[b_idx].original_x;
+                  }
+              });
     return indices;
+}
+
+int AbacusLegalizer::find_nearest_row_idx(const Cell& cell, const PlacementData& data) {
+    int nearest_idx = -1;
+    double min_y_dist = std::numeric_limits<double>::infinity();
+
+    for (size_t i = 0; i < data.rows.size(); ++i) {
+        double y_dist = std::abs(static_cast<double>(data.rows[i].y) - cell.original_y);
+        if (y_dist < min_y_dist) {
+            min_y_dist = y_dist;
+            nearest_idx = i;
+        }
+    }
+    return nearest_idx;
+}
+
+
+// This function might be simplified or removed if AbacusLegalizer::legalize handles subrow iteration directly.
+PlacementTrialResult AbacusLegalizer::try_place_cell_in_sub_row_trial(
+    const SubRow* sub_row,
+    int cell_idx,
+    const PlacementData& placement_data,
+    bool check_penalty_for_all_cluster_cells) {
+    
+    // Basic check: can cell even fit?
+    if (static_cast<double>(placement_data.cells[cell_idx].width) > (sub_row->end_x - sub_row->start_x) + PlaceRow::EPSILON) {
+        PlacementTrialResult res;
+        res.valid = false;
+        return res;
+    }
+    
+    // More sophisticated check: available sites (from original user code)
+    int cell_sites_needed = static_cast<int>(std::ceil(static_cast<double>(placement_data.cells[cell_idx].width) / sub_row->site_width));
+    int used_sites = 0;
+    for (int existing_cell_idx : sub_row->cells) { // sub_row->cells has FINALIZED cells. Trial needs different logic.
+                                                // This check is problematic for trial mode if sub_row->cells isn't temporary.
+                                                // The trial logic should consider the *current* state of clusters.
+        // This site check needs to be based on the current sub_row->last_cluster's total_width
+        // or a similar dynamic calculation of used space.
+    }
+    // For now, rely on PlaceRow::place_row_trial to handle placement feasibility.
+    // The site check based on sub_row->cells is not correct for trial.
+
+    return PlaceRow::place_row_trial(sub_row, cell_idx, placement_data, 
+                                     placement_data.max_displacement_constraint, 
+                                     check_penalty_for_all_cluster_cells);
+}
+
+
+// This function is largely superseded by direct iteration in AbacusLegalizer::legalize
+std::pair<SubRow*, PlacementTrialResult> AbacusLegalizer::find_best_sub_row_in_row(
+    int cell_idx, 
+    int row_idx, 
+    PlacementData& placement_data,
+    const PlacementData& const_placement_data,
+    double current_best_overall_cost,
+    bool check_penalty_for_all_cluster_cells) {
+    
+    SubRow* best_sub_row_in_this_row = nullptr;
+    PlacementTrialResult best_trial_for_this_row; // Default invalid
+
+    const Row& current_row = const_placement_data.rows[row_idx];
+    const Cell& cell_to_place = const_placement_data.cells[cell_idx];
+
+    // Sort subrows in this row by proximity to cell's original_x
+    std::vector<SubRow*> sub_rows_in_row_ptrs;
+    for(size_t i=0; i < placement_data.rows[row_idx].sub_rows.size(); ++i) { // Use non-const for ptr
+        sub_rows_in_row_ptrs.push_back(&placement_data.rows[row_idx].sub_rows[i]);
+    }
+
+    std::sort(sub_rows_in_row_ptrs.begin(), sub_rows_in_row_ptrs.end(), 
+        [&cell_to_place](const SubRow* a, const SubRow* b) {
+            double dist_a = 0;
+            if (cell_to_place.original_x < a->start_x) dist_a = a->start_x - cell_to_place.original_x;
+            else if (cell_to_place.original_x > a->end_x - cell_to_place.width) dist_a = cell_to_place.original_x - (a->end_x - cell_to_place.width);
+            
+            double dist_b = 0;
+            if (cell_to_place.original_x < b->start_x) dist_b = b->start_x - cell_to_place.original_x;
+            else if (cell_to_place.original_x > b->end_x - cell_to_place.width) dist_b = cell_to_place.original_x - (b->end_x - cell_to_place.width);
+            return dist_a < dist_b;
+        });
+
+
+    for (SubRow* sub_row_ptr : sub_rows_in_row_ptrs) {
+        // Check if cell can physically fit (width)
+        if (static_cast<double>(cell_to_place.width) > (sub_row_ptr->end_x - sub_row_ptr->start_x) + PlaceRow::EPSILON) {
+            continue;
+        }
+
+        PlacementTrialResult trial_res = PlaceRow::place_row_trial(
+            sub_row_ptr, cell_idx, const_placement_data, 
+            const_placement_data.max_displacement_constraint, 
+            check_penalty_for_all_cluster_cells);
+
+        if (trial_res.valid && trial_res.cost < best_trial_for_this_row.cost) {
+            best_trial_for_this_row = trial_res;
+            best_sub_row_in_this_row = sub_row_ptr; // Store pointer to the subrow in non-const data
+        }
+    }
+    return {best_sub_row_in_this_row, best_trial_for_this_row};
+}
+
+void AbacusLegalizer::apply_site_alignment_to_all_subrows(PlacementData& data) {
+    for (Row& row : data.rows) {
+        for (SubRow& sub_row : row.sub_rows) {
+            // This function is now effectively handled by PlaceRow::determine_and_apply_final_positions
+            // called after each PlaceRow::place_row_final.
+            // If a final sweep is desired, it could be implemented here, but might be redundant.
+            // For now, this function can be left empty or removed if confidence in incremental alignment is high.
+        }
+    }
 }
