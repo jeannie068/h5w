@@ -1,3 +1,4 @@
+// place_row.hpp - Modified version
 #ifndef PLACE_ROW_HPP
 #define PLACE_ROW_HPP
 
@@ -17,9 +18,11 @@ public:
     static constexpr double EPSILON = 1e-9;
     
     // Trial mode - calculates positions without modifying cells
+    // Added add_penalty parameter for early pruning
     static PlacementResult place_row_trial(SubRow* sub_row, int new_cell_index, 
                                           const std::vector<Cell>& cells, 
-                                          double max_displacement_constraint);
+                                          double max_displacement_constraint,
+                                          bool add_penalty = true);
     
     // Final mode - actually places cells based on calculated positions
     static void place_row_final(SubRow* sub_row, const PlacementResult& result,
@@ -30,9 +33,14 @@ public:
                           double max_displacement_constraint, bool trial_mode = false);
 
 private:
-    // Helper function for trial mode cluster collapse
-    static void collapse_clusters_trial(std::vector<Cluster>& clusters, int cluster_index,
-                                       double sub_row_start_x, double sub_row_end_x);
+    // Helper function for trial mode cluster collapse with early pruning
+    static bool collapse_clusters_trial(std::vector<Cluster>& clusters, int cluster_index,
+                                       double sub_row_start_x, double sub_row_end_x,
+                                       const std::vector<Cell>& cells,
+                                       const std::vector<int>& cell_indices,
+                                       double max_displacement_constraint,
+                                       int sub_row_y,
+                                       bool add_penalty);
     
     // Cluster operations (from original implementation)
     static void add_cell_to_cluster(Cluster& cluster, int cell_index, 

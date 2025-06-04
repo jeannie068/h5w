@@ -1,3 +1,4 @@
+// abacus_legalizer.hpp - Modified version
 #ifndef ABACUS_LEGALIZER_HPP
 #define ABACUS_LEGALIZER_HPP
 
@@ -25,13 +26,22 @@ private:
     // Try to place a cell in a specific sub-row using trial mode
     PlacementResult try_place_cell_trial(int cell_index, SubRow* sub_row, 
                                        const PlacementData& data, 
-                                       double current_best_cost);
+                                       double current_best_cost,
+                                       bool add_penalty = true);  // Added add_penalty parameter
     
     // Apply site alignment to all cells after placement
     void apply_site_alignment_all(PlacementData& data);
     
     // Get the index of a sub-row in the all_sub_rows vector
     int get_sub_row_index(SubRow* sub_row, const PlacementData& data);
+    
+    // Get sub-rows for a specific row
+    std::vector<SubRow*> get_sub_rows_for_row(const PlacementData& data, int row_idx);
+    
+    // Find best sub-row within a row
+    std::pair<SubRow*, PlacementResult> find_best_sub_row_in_row(
+        int cell_idx, int row_idx, const PlacementData& data, 
+        double current_best_cost, bool add_penalty);
 };
 
 #endif // ABACUS_LEGALIZER_HPP

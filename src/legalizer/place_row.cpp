@@ -1,22 +1,21 @@
+// place_row.cpp - Modified version with early pruning
 #include "place_row.hpp"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <stack>
 
 PlacementResult PlaceRow::place_row_trial(SubRow* sub_row, int new_cell_index,
                                          const std::vector<Cell>& cells, 
-                                         double max_displacement_constraint) {
+                                         double max_displacement_constraint,
+                                         bool add_penalty) {
     PlacementResult result;
     result.valid = false;
     result.cost = std::numeric_limits<double>::infinity();
     
     if (!sub_row) {
-        // std::cout << "      PlaceRow trial: sub_row is null" << std::endl;
         return result;
     }
-    
-    // std::cout << "      PlaceRow trial: cell " << cells[new_cell_index].name 
-    //          << " to sub-row with " << sub_row->cells.size() << " existing cells" << std::endl;
     
     // Get all cells in this sub-row including the new one
     std::vector<int> cell_indices = sub_row->cells;
@@ -30,28 +29,19 @@ PlacementResult PlaceRow::place_row_trial(SubRow* sub_row, int new_cell_index,
                   return cells[a].original_x < cells[b].original_x;
               });
     
-    // std::cout << "      Sorted cell order: ";
-    for (int idx : cell_indices) {
-    //     std::cout << cells[idx].name << "(" << cells[idx].original_x << ") ";
-    }
-    // std::cout << std::endl;
-    
     // Create clusters using dynamic programming approach
     std::vector<Cluster> clusters;
     
     for (int i = 0; i < static_cast<int>(cell_indices.size()); ++i) {
         int cell_index = cell_indices[i];
         
-        // Adjust cell position to be within sub-row bounds (like reference implementation)
+        // Adjust cell position to be within sub-row bounds
         double cell_x = cells[cell_index].original_x;
         if (cell_x < sub_row->start_x) {
             cell_x = sub_row->start_x;
         } else if (cell_x > sub_row->end_x - cells[cell_index].width) {
             cell_x = sub_row->end_x - cells[cell_index].width;
         }
-        // std::cout << "      Cell " << cells[cell_index].name 
-        //          << " adjusted position: " << cells[cell_index].original_x 
-        //          << " -> " << cell_x << std::endl;
         
         bool create_new_cluster = clusters.empty();
         
@@ -73,8 +63,6 @@ PlacementResult PlaceRow::place_row_trial(SubRow* sub_row, int new_cell_index,
             new_cluster.q_value = cells[cell_index].weight * cell_x;
             new_cluster.optimal_x = cell_x;
             clusters.push_back(new_cluster);
-            // std::cout << "      Created new cluster for cell " << cells[cell_index].name 
-            //          << " at x=" << cell_x << std::endl;
         } else {
             // Add cell to last cluster
             Cluster& cluster = clusters.back();
@@ -82,25 +70,30 @@ PlacementResult PlaceRow::place_row_trial(SubRow* sub_row, int new_cell_index,
             cluster.total_weight += cells[cell_index].weight;
             cluster.q_value += cells[cell_index].weight * (cell_x - cluster.total_width);
             cluster.total_width += cells[cell_index].width;
-            // std::cout << "      Added cell " << cells[cell_index].name << " to existing cluster" << std::endl;
             
-            // Collapse clusters if necessary
-            collapse_clusters_trial(clusters, clusters.size() - 1, sub_row->start_x, sub_row->end_x);
+            // Collapse clusters if necessary with early pruning
+            bool valid = collapse_clusters_trial(clusters, clusters.size() - 1, 
+                                               sub_row->start_x, sub_row->end_x,
+                                               cells, cell_indices,
+                                               max_displacement_constraint,
+                                               sub_row->y, add_penalty);
+            
+            // Early exit if add_penalty is true and constraint is violated
+            if (!valid && add_penalty) {
+                result.valid = false;
+                return result;
+            }
         }
     }
     
-    // std::cout << "      Total clusters: " << clusters.size() << std::endl;
-    
-    // Calculate positions from clusters (without site alignment for now)
+    // Calculate positions from clusters
     result.cell_positions.clear();
     for (const auto& cluster : clusters) {
         double current_x = cluster.optimal_x;
-        // std::cout << "      Cluster starting at x=" << current_x << ", width=" << cluster.total_width << std::endl;
         
         for (int i = cluster.first_cell_index; i <= cluster.last_cell_index; ++i) {
             int cell_idx = cell_indices[i];
             result.cell_positions.push_back({cell_idx, current_x});
-            // std::cout << "        Cell " << cells[cell_idx].name << " at x=" << current_x << std::endl;
             current_x += cells[cell_idx].width;
         }
     }
@@ -112,9 +105,6 @@ PlacementResult PlaceRow::place_row_trial(SubRow* sub_row, int new_cell_index,
     for (const auto& pos : result.cell_positions) {
         double cell_end = pos.second + cells[pos.first].width;
         if (pos.second < sub_row->start_x - EPSILON || cell_end > sub_row->end_x + EPSILON) {
-            // std::cout << "      Boundary constraint violated for cell " << cells[pos.first].name 
-            //          << ": x=" << pos.second << ", end=" << cell_end 
-            //          << ", sub_row=[" << sub_row->start_x << ", " << sub_row->end_x << "]" << std::endl;
             result.valid = false;
             return result;
         }
@@ -128,8 +118,6 @@ PlacementResult PlaceRow::place_row_trial(SubRow* sub_row, int new_cell_index,
         double displacement = std::sqrt(dx * dx + dy * dy);
         
         if (displacement > max_displacement_constraint) {
-            // std::cout << "      Max displacement violated for cell " << cells[cell_idx].name 
-            //          << ": " << displacement << " > " << max_displacement_constraint << std::endl;
             result.valid = false;
             return result;
         }
@@ -137,12 +125,88 @@ PlacementResult PlaceRow::place_row_trial(SubRow* sub_row, int new_cell_index,
         // Calculate cost for the new cell
         if (cell_idx == new_cell_index) {
             result.cost = displacement;
-            // std::cout << "      New cell displacement cost: " << result.cost << std::endl;
         }
     }
     
-    // std::cout << "      PlaceRow trial result: valid=" << result.valid << ", cost=" << result.cost << std::endl;
     return result;
+}
+
+// Modified collapse function with early pruning
+bool PlaceRow::collapse_clusters_trial(std::vector<Cluster>& clusters, int cluster_index,
+                                      double sub_row_start_x, double sub_row_end_x,
+                                      const std::vector<Cell>& cells,
+                                      const std::vector<int>& cell_indices,
+                                      double max_displacement_constraint,
+                                      int sub_row_y,
+                                      bool add_penalty) {
+    if (cluster_index < 0 || cluster_index >= static_cast<int>(clusters.size())) {
+        return true;
+    }
+    
+    // Stack to track clusters for early constraint checking
+    std::stack<Cluster*> cluster_stack;
+    Cluster* current_cluster = &clusters[cluster_index];
+    
+    while (true) {
+        cluster_stack.push(current_cluster);
+        
+        // Calculate optimal position
+        current_cluster->optimal_x = current_cluster->q_value / current_cluster->total_weight;
+        
+        // Limit position between sub-row boundaries
+        current_cluster->optimal_x = std::max(current_cluster->optimal_x, sub_row_start_x);
+        current_cluster->optimal_x = std::min(current_cluster->optimal_x, 
+                                           sub_row_end_x - current_cluster->total_width);
+        
+        // Check overlap with predecessor cluster
+        if (cluster_index > 0) {
+            Cluster& prev_cluster = clusters[cluster_index - 1];
+            double prev_cluster_end = prev_cluster.optimal_x + prev_cluster.total_width;
+            
+            if (prev_cluster_end > current_cluster->optimal_x + EPSILON) {
+                // Merge clusters
+                prev_cluster.last_cell_index = current_cluster->last_cell_index;
+                prev_cluster.total_weight += current_cluster->total_weight;
+                prev_cluster.q_value += current_cluster->q_value - current_cluster->total_weight * prev_cluster.total_width;
+                prev_cluster.total_width += current_cluster->total_width;
+                
+                clusters.erase(clusters.begin() + cluster_index);
+                cluster_index--;
+                current_cluster = &clusters[cluster_index];
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    
+    // Early constraint checking when add_penalty is true
+    if (add_penalty) {
+        // Check if any cell in the affected clusters violates max displacement
+        while (!cluster_stack.empty()) {
+            Cluster* cluster = cluster_stack.top();
+            cluster_stack.pop();
+            
+            double x = cluster->optimal_x;
+            for (int i = cluster->first_cell_index; i <= cluster->last_cell_index; ++i) {
+                int cell_idx = cell_indices[i];
+                
+                // Calculate displacement
+                double dx = x - cells[cell_idx].original_x;
+                double dy = sub_row_y - cells[cell_idx].original_y;
+                double displacement = std::sqrt(dx * dx + dy * dy);
+                
+                if (displacement > max_displacement_constraint) {
+                    return false;  // Early exit: constraint violated
+                }
+                
+                x += cells[cell_idx].width;
+            }
+        }
+    }
+    
+    return true;
 }
 
 void PlaceRow::place_row_final(SubRow* sub_row, const PlacementResult& result,
@@ -158,48 +222,7 @@ void PlaceRow::place_row_final(SubRow* sub_row, const PlacementResult& result,
     }
 }
 
-// Helper function for trial mode cluster collapse
-void PlaceRow::collapse_clusters_trial(std::vector<Cluster>& clusters, int cluster_index,
-                                      double sub_row_start_x, double sub_row_end_x) {
-    if (cluster_index < 0 || cluster_index >= static_cast<int>(clusters.size())) {
-        return;
-    }
-    
-    Cluster& current_cluster = clusters[cluster_index];
-    
-    // Calculate optimal position
-    current_cluster.optimal_x = current_cluster.q_value / current_cluster.total_weight;
-    // std::cout << "        Cluster optimal_x before bounds: " << current_cluster.optimal_x << std::endl;
-    
-    // Limit position between sub-row boundaries
-    current_cluster.optimal_x = std::max(current_cluster.optimal_x, sub_row_start_x);
-    current_cluster.optimal_x = std::min(current_cluster.optimal_x, 
-                                       sub_row_end_x - current_cluster.total_width);
-    // std::cout << "        Cluster optimal_x after bounds: " << current_cluster.optimal_x 
-    //          << ", width=" << current_cluster.total_width << std::endl;
-    
-    // Check overlap with predecessor cluster
-    if (cluster_index > 0) {
-        Cluster& prev_cluster = clusters[cluster_index - 1];
-        double prev_cluster_end = prev_cluster.optimal_x + prev_cluster.total_width;
-        
-        if (prev_cluster_end > current_cluster.optimal_x + EPSILON) {
-            // std::cout << "        Clusters overlap, merging..." << std::endl;
-            // Merge clusters
-            prev_cluster.last_cell_index = current_cluster.last_cell_index;
-            prev_cluster.total_weight += current_cluster.total_weight;
-            prev_cluster.q_value += current_cluster.q_value - current_cluster.total_weight * prev_cluster.total_width;
-            prev_cluster.total_width += current_cluster.total_width;
-            
-            clusters.erase(clusters.begin() + cluster_index);
-            
-            // Recursively collapse the merged cluster
-            collapse_clusters_trial(clusters, cluster_index - 1, sub_row_start_x, sub_row_end_x);
-        }
-    }
-}
-
-// Legacy implementation - DEPRECATED - Use place_row_trial/place_row_final instead
+// Legacy implementation - DEPRECATED
 bool PlaceRow::place_row(SubRow* sub_row, std::vector<Cell>& cells, 
                         double max_displacement_constraint, bool trial_mode) {
     if (!sub_row) {
@@ -213,8 +236,6 @@ bool PlaceRow::place_row(SubRow* sub_row, std::vector<Cell>& cells,
     
     // For backward compatibility, use the new trial/final approach
     if (trial_mode) {
-        // In trial mode, we shouldn't modify cells
-        // This is a compatibility shim - the caller should use place_row_trial directly
         std::cerr << "Warning: Legacy place_row() called in trial mode. Use place_row_trial() instead." << std::endl;
         return false;
     }
@@ -265,7 +286,10 @@ bool PlaceRow::place_row(SubRow* sub_row, std::vector<Cell>& cells,
             cluster.q_value += cells[cell_index].weight * (cell_x - cluster.total_width);
             cluster.total_width += cells[cell_index].width;
             
-            collapse_clusters_trial(clusters, clusters.size() - 1, sub_row->start_x, sub_row->end_x);
+            // Use the old collapse without early pruning for legacy compatibility
+            collapse_clusters_trial(clusters, clusters.size() - 1, sub_row->start_x, sub_row->end_x,
+                                  cells, cell_indices, max_displacement_constraint,
+                                  sub_row->y, false);  // No early pruning in legacy mode
         }
     }
     
@@ -301,7 +325,7 @@ bool PlaceRow::place_row(SubRow* sub_row, std::vector<Cell>& cells,
     return true;
 }
 
-// Helper implementations from original code
+// Helper implementations
 void PlaceRow::add_cell_to_cluster(Cluster& cluster, int cell_index, 
                                   const std::vector<Cell>& cells) {
     cluster.total_weight += cells[cell_index].weight;
