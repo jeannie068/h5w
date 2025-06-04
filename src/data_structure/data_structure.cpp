@@ -69,9 +69,9 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index)
     // Find all blockages that overlap with this row
     for (const auto& blockage : blockages) {
         if (blockage.overlaps_row_vertically(y, height) && 
-            blockage.overlaps_row_horizontally(start_x, end_x)) {
-            int block_start = std::max(blockage.x, start_x);
-            int block_end = std::min(blockage.x + blockage.width, end_x);
+            blockage.overlaps_row_horizontally(row_start_x, row_end_x)) {
+            int block_start = std::max(blockage.x, row_start_x);
+            int block_end = std::min(blockage.x + blockage.width, row_end_x);
             blockage_intervals.push_back({block_start, block_end});
         }
     }
@@ -91,7 +91,7 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index)
     
     // Create sub-rows in the gaps
     sub_rows.clear();
-    int current_x = start_x;
+    int current_x = row_start_x;
     
     for (const auto& interval : merged_intervals) {
         if (current_x < interval.first) {
@@ -101,14 +101,14 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index)
             
             // Ensure sub-row boundaries are site-aligned
             // sub_start: ceil to next site boundary
-            double relative_start = sub_start - start_x;
+            double relative_start = sub_start - row_start_x;
             int start_site_offset = static_cast<int>(std::ceil(relative_start / site_width));
-            sub_start = start_x + start_site_offset * site_width;
+            sub_start = row_start_x + start_site_offset * site_width;
             
             // sub_end: floor to previous site boundary  
-            double relative_end = sub_end - start_x;
+            double relative_end = sub_end - row_start_x;
             int end_site_offset = static_cast<int>(std::floor(relative_end / site_width));
-            sub_end = start_x + end_site_offset * site_width;
+            sub_end = row_start_x + end_site_offset * site_width;
             
             if (sub_end > sub_start) {
                 sub_rows.emplace_back(row_index, sub_start, sub_end, y, height, site_width);
@@ -118,31 +118,27 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index)
     }
     
     // Create sub-row after the last blockage (if any space left)
-    if (current_x < end_x) {
+    if (current_x < row_end_x) {
         double sub_start = current_x;
-        double sub_end = end_x;
+        double sub_end = row_end_x;
         
         // Ensure sub-row boundaries are site-aligned
         // sub_start: ceil to next site boundary
-        double relative_start = sub_start - start_x;
+        double relative_start = sub_start - row_start_x;
         int start_site_offset = static_cast<int>(std::ceil(relative_start / site_width));
-        sub_start = start_x + start_site_offset * site_width;
+        sub_start = row_start_x + start_site_offset * site_width;
         
         // sub_end: should already be site-aligned (end_x = start_x + site_width * num_sites)
         // but apply floor for consistency
-        double relative_end = sub_end - start_x;
+        double relative_end = sub_end - row_start_x;
         int end_site_offset = static_cast<int>(std::floor(relative_end / site_width));
-        sub_end = start_x + end_site_offset * site_width;
+        sub_end = row_start_x + end_site_offset * site_width;
         
         if (sub_end > sub_start) {
             sub_rows.emplace_back(row_index, sub_start, sub_end, y, height, site_width);
         }
     }
-    
-    // If no blockages overlap, create one sub-row for the entire row
-    if (merged_intervals.empty()) {
-        sub_rows.emplace_back(row_index, start_x, end_x, y, height, site_width);
-    }
+
 }
 
 // PlacementData methods

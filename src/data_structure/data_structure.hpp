@@ -86,15 +86,15 @@ struct Row {
     std::string name;
     int site_width;
     int height;
-    int start_x;
+    int row_start_x;
     int y;
     int num_sites;
-    int end_x;  // calculated: start_x + site_width * num_sites
+    int row_end_x;  // calculated: start_x + site_width * num_sites
     std::vector<SubRow> sub_rows;
     
     Row(const std::string& n, int sw, int h, int sx, int row_y, int ns)
-        : name(n), site_width(sw), height(h), start_x(sx), y(row_y), num_sites(ns) {
-        end_x = start_x + site_width * num_sites;
+        : name(n), site_width(sw), height(h), row_start_x(sx), y(row_y), num_sites(ns) {
+        row_end_x = row_start_x + site_width * num_sites;
     }
     
     // Create sub-rows by splitting around blockages
