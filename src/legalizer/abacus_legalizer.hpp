@@ -16,31 +16,22 @@ private:
     // Sort cells by their original x position
     std::vector<int> sort_cells_by_x(const std::vector<Cell>& cells, bool ascending = true);
     
+    // Find the nearest row to a cell
+    int find_nearest_row(const Cell& cell, const PlacementData& data);
+    
     // Calculate lower bound cost for placing a cell in a sub-row (vertical movement only)
     double calculate_lower_bound_cost(const Cell& cell, const SubRow& sub_row);
     
-    // Calculate actual cost (Euclidean displacement) for a cell
-    double calculate_actual_cost(const Cell& cell, double new_x, double new_y);
+    // Try to place a cell in a specific sub-row using trial mode
+    PlacementResult try_place_cell_trial(int cell_index, SubRow* sub_row, 
+                                       const PlacementData& data, 
+                                       double current_best_cost);
     
-    // Try to place a cell in a specific sub-row
-    // Returns true if placement is valid, false otherwise
-    bool try_place_cell_in_sub_row(int cell_index, SubRow* sub_row, 
-                                   PlacementData& data, double& cost);
+    // Apply site alignment to all cells after placement
+    void apply_site_alignment_all(PlacementData& data);
     
-    // Get sub-rows sorted by distance from cell's original position
-    std::vector<int> get_sorted_sub_rows(const Cell& cell, 
-                                         const std::vector<SubRow*>& all_sub_rows);
-    
-    // Check if we should continue searching rows in a given direction
-    bool should_continue_search(double lower_bound, double best_cost);
-    
-    // Restore original cell positions for cells in a sub-row
-    void restore_sub_row_cells(SubRow* sub_row, std::vector<Cell>& cells,
-                              const std::vector<std::pair<double, double>>& original_positions);
-    
-    // Save current positions of cells in a sub-row
-    std::vector<std::pair<double, double>> save_sub_row_positions(const SubRow* sub_row, 
-                                                                  const std::vector<Cell>& cells);
+    // Get the index of a sub-row in the all_sub_rows vector
+    int get_sub_row_index(SubRow* sub_row, const PlacementData& data);
 };
 
 #endif // ABACUS_LEGALIZER_HPP

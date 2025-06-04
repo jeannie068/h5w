@@ -5,6 +5,7 @@
 #include <cmath>
 #include "parser/parser.hpp"
 #include "legalizer/abacus_legalizer.hpp"
+#include "Logger.hpp"
 
 int main(int argc, char* argv[]) {
     // Check command line arguments
@@ -42,6 +43,8 @@ int main(int argc, char* argv[]) {
     // Run legalization
     std::cout << "\nRunning Abacus legalization..." << std::endl;
     auto start_time = std::chrono::high_resolution_clock::now();
+
+    Logger::init();
     
     AbacusLegalizer legalizer;
     bool success = legalizer.legalize(data);

@@ -1,6 +1,8 @@
 #include "data_structure.hpp"
+#include "../Logger.hpp"
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 // Cell methods
 double Cell::get_displacement() const {
@@ -64,6 +66,10 @@ void SubRow::remove_cell(int cell_index) {
 
 // Row methods
 void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index) {
+    Logger::log("Creating sub-rows for row " + name + " (index=" + std::to_string(row_index) 
+             + ", y=" + std::to_string(y) + ", x_range=[" + std::to_string(row_start_x) 
+             + ", " + std::to_string(row_end_x) + "])");
+    
     std::vector<std::pair<int, int>> blockage_intervals;
     
     // Find all blockages that overlap with this row
@@ -73,6 +79,9 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index)
             int block_start = std::max(blockage.x, row_start_x);
             int block_end = std::min(blockage.x + blockage.width, row_end_x);
             blockage_intervals.push_back({block_start, block_end});
+            
+            Logger::log("  Blockage " + blockage.name + " overlaps: [" 
+                     + std::to_string(block_start) + ", " + std::to_string(block_end) + "]");
         }
     }
     
@@ -89,6 +98,13 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index)
         }
     }
     
+    // std::cout << "  Merged blockage intervals: ";
+    Logger::log("  Merged blockage intervals: ");
+    for (const auto& interval : merged_intervals) {
+        Logger::log("[" + std::to_string(interval.first) + ", " + std::to_string(interval.second) + "] ");
+    }
+    // std::cout << std::endl;
+    
     // Create sub-rows in the gaps
     sub_rows.clear();
     int current_x = row_start_x;
@@ -98,6 +114,9 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index)
             // Create sub-row before this blockage
             double sub_start = current_x;
             double sub_end = interval.first;
+            
+            Logger::log("  Trying to create sub-row before blockage: [" 
+                     + std::to_string(sub_start) + ", " + std::to_string(sub_end) + "]");
             
             // Ensure sub-row boundaries are site-aligned
             // sub_start: ceil to next site boundary
@@ -110,8 +129,14 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index)
             int end_site_offset = static_cast<int>(std::floor(relative_end / site_width));
             sub_end = row_start_x + end_site_offset * site_width;
             
+            Logger::log("    After site alignment: [" 
+                     + std::to_string(sub_start) + ", " + std::to_string(sub_end) + "]");
+            
             if (sub_end > sub_start) {
                 sub_rows.emplace_back(row_index, sub_start, sub_end, y, height, site_width);
+                Logger::log(" - Created sub-row " + std::to_string(sub_rows.size() - 1));
+            } else {
+                Logger::log(" - Too small, skipped");
             }
         }
         current_x = interval.second;
@@ -121,6 +146,9 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index)
     if (current_x < row_end_x) {
         double sub_start = current_x;
         double sub_end = row_end_x;
+        
+        Logger::log("  Trying to create sub-row after last blockage: [" 
+                 + std::to_string(sub_start) + ", " + std::to_string(sub_end) + "]");
         
         // Ensure sub-row boundaries are site-aligned
         // sub_start: ceil to next site boundary
@@ -134,11 +162,18 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index)
         int end_site_offset = static_cast<int>(std::floor(relative_end / site_width));
         sub_end = row_start_x + end_site_offset * site_width;
         
+        Logger::log("    After site alignment: [" 
+                 + std::to_string(sub_start) + ", " + std::to_string(sub_end) + "]");
+        
         if (sub_end > sub_start) {
             sub_rows.emplace_back(row_index, sub_start, sub_end, y, height, site_width);
+            Logger::log(" - Created sub-row " + std::to_string(sub_rows.size() - 1));
+        } else {
+            Logger::log(" - Too small, skipped");
         }
     }
-
+    
+    Logger::log("  Total sub-rows created: " + std::to_string(sub_rows.size()));
 }
 
 // PlacementData methods
@@ -148,6 +183,14 @@ void PlacementData::initialize_sub_row_pointers() {
         for (auto& sub_row : row.sub_rows) {
             all_sub_rows.push_back(&sub_row);
         }
+    }
+    
+    Logger::log("Initialized " + std::to_string(all_sub_rows.size()) + " sub-row pointers:");
+    for (int i = 0; i < static_cast<int>(all_sub_rows.size()); ++i) {
+        Logger::log("  Sub-row " + std::to_string(i) + ": y=" + std::to_string(all_sub_rows[i]->y) 
+                 + ", x_range=[" + std::to_string(all_sub_rows[i]->start_x) 
+                 + ", " + std::to_string(all_sub_rows[i]->end_x) 
+                 + "], sites=" + std::to_string(all_sub_rows[i]->available_sites));
     }
 }
 
