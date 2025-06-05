@@ -1,8 +1,8 @@
 #include "data_structure.hpp"
-// #include "../Logger.hpp" // Assuming Logger might be used, uncomment if needed
+#include "../Logger.hpp"
 #include <algorithm>
 #include <cmath>
-#include <iostream> // For potential debugging, otherwise can be removed
+#include <iostream>
 
 // Cell methods
 double Cell::get_displacement() const {
@@ -15,59 +15,80 @@ double Cell::get_displacement() const {
 bool Blockage::overlaps_row_vertically(int row_y, int row_height) const {
     int blockage_top = y + height;
     int row_top = row_y + row_height;
+    
+    // Check if there's vertical overlap
     return !(blockage_top <= row_y || y >= row_top);
 }
 
 bool Blockage::overlaps_row_horizontally(int start_x, int end_x) const {
     int blockage_right = x + width;
+    
+    // Check if there's horizontal overlap
     return !(blockage_right <= start_x || x >= end_x);
 }
 
 // SubRow methods
 bool SubRow::can_fit_cell(int cell_width) const {
-    // This is a simplified check. A more accurate check would consider remaining_sites.
-    // For now, ensure the sub-row itself is wide enough.
-    // The available_sites check is done in AbacusLegalizer::try_place_cell_trial
-    return (end_x - start_x) >= cell_width;
+    int required_sites = static_cast<int>(std::ceil(static_cast<double>(cell_width) / site_width));
+    int current_used_sites = 0;
+    
+    // Calculate currently used sites (this is approximate, actual calculation needs cell positions)
+    return required_sites <= available_sites;
 }
 
-double SubRow::get_site_aligned_x(double x_coord) const {
-    if (site_width == 0) return x_coord; // Avoid division by zero
-    double relative_x = x_coord - start_x;
-    // Ensure alignment doesn't push cell before subrow_start_x due to floating point
-    double aligned_x = start_x + std::round(relative_x / site_width) * site_width;
-    return std::max(start_x, aligned_x);
+double SubRow::get_site_aligned_x(double x) const {
+    // Align x to site boundary using floor (align to left or equal site boundary)
+    double relative_x = x - start_x;
+    int site_offset = static_cast<int>(std::floor(relative_x / site_width));
+    double aligned_x = start_x + site_offset * site_width;
+    
+    // Ensure it's not less than sub-row start due to floating point issues
+    aligned_x = std::max(start_x, aligned_x);
+    
+    return aligned_x;
 }
 
-void SubRow::add_cell_to_final_list(int cell_index, const std::vector<Cell>& all_cells) {
-    auto it = std::lower_bound(cells.begin(), cells.end(), cell_index, 
-        [&](int a_idx, int b_val_idx) {
-            return all_cells[a_idx].original_x < all_cells[b_val_idx].original_x;
+void SubRow::add_cell(int cell_index, const std::vector<Cell>& all_cells) {
+    // Insert cell maintaining sorted order by original_x
+    auto insert_pos = std::lower_bound(cells.begin(), cells.end(), cell_index,
+        [&all_cells](int a, int b) {
+            return all_cells[a].original_x < all_cells[b].original_x;
         });
-    cells.insert(it, cell_index);
+    cells.insert(insert_pos, cell_index);
 }
 
-void SubRow::remove_cell_from_final_list(int cell_index) {
+void SubRow::remove_cell(int cell_index) {
     auto it = std::find(cells.begin(), cells.end(), cell_index);
     if (it != cells.end()) {
         cells.erase(it);
     }
 }
 
-
 // Row methods
-void Row::create_sub_rows(const std::vector<Blockage>& blockages_vec, int row_index) {
+void Row::create_sub_rows(const std::vector<Blockage>& blockages, int row_index) {
+    // Logger::log("Creating sub-rows for row " + name + " (index=" + std::to_string(row_index) 
+    //          + ", y=" + std::to_string(y) + ", x_range=[" + std::to_string(row_start_x) 
+    //          + ", " + std::to_string(row_end_x) + "])");
+    
     std::vector<std::pair<int, int>> blockage_intervals;
-    for (const auto& blockage : blockages_vec) {
-        if (blockage.overlaps_row_vertically(y, height) &&
+    
+    // Find all blockages that overlap with this row
+    for (const auto& blockage : blockages) {
+        if (blockage.overlaps_row_vertically(y, height) && 
             blockage.overlaps_row_horizontally(row_start_x, row_end_x)) {
-            blockage_intervals.push_back({std::max(blockage.x, row_start_x),
-                                          std::min(blockage.x + blockage.width, row_end_x)});
+            int block_start = std::max(blockage.x, row_start_x);
+            int block_end = std::min(blockage.x + blockage.width, row_end_x);
+            blockage_intervals.push_back({block_start, block_end});
+            
+            // Logger::log("  Blockage " + blockage.name + " overlaps: [" 
+            //          + std::to_string(block_start) + ", " + std::to_string(block_end) + "]");
         }
     }
-
+    
+    // Sort blockage intervals by start position
     std::sort(blockage_intervals.begin(), blockage_intervals.end());
-
+    
+    // Merge overlapping intervals
     std::vector<std::pair<int, int>> merged_intervals;
     for (const auto& interval : blockage_intervals) {
         if (merged_intervals.empty() || merged_intervals.back().second < interval.first) {
@@ -76,66 +97,106 @@ void Row::create_sub_rows(const std::vector<Blockage>& blockages_vec, int row_in
             merged_intervals.back().second = std::max(merged_intervals.back().second, interval.second);
         }
     }
-
-    sub_rows.clear();
-    double current_s_x = static_cast<double>(row_start_x);
-
+    
+    // std::cout << "  Merged blockage intervals: ";
+    // Logger::log("  Merged blockage intervals: ");
     for (const auto& interval : merged_intervals) {
-        if (current_s_x < static_cast<double>(interval.first)) {
-            double sub_start = current_s_x;
-            double sub_end = static_cast<double>(interval.first);
-             // Ensure sub-row boundaries are site-aligned for start
-            double rel_start = sub_start - row_start_x;
-            int start_site_offset = static_cast<int>(std::ceil(rel_start / site_width));
-            sub_start = static_cast<double>(row_start_x) + start_site_offset * site_width;
-
-            // Ensure sub-row boundaries are site-aligned for end
-            double rel_end = sub_end - row_start_x;
-            int end_site_offset = static_cast<int>(std::floor(rel_end / site_width));
-            sub_end = static_cast<double>(row_start_x) + end_site_offset * site_width;
-
-
-            if (sub_end > sub_start + 1e-9) { // Add epsilon for float comparison
-                 sub_rows.emplace_back(row_index, sub_start, sub_end, y, height, site_width);
+        // Logger::log("[" + std::to_string(interval.first) + ", " + std::to_string(interval.second) + "] ");
+    }
+    // std::cout << std::endl;
+    
+    // Create sub-rows in the gaps
+    sub_rows.clear();
+    int current_x = row_start_x;
+    
+    for (const auto& interval : merged_intervals) {
+        if (current_x < interval.first) {
+            // Create sub-row before this blockage
+            double sub_start = current_x;
+            double sub_end = interval.first;
+            
+            // Logger::log("  Trying to create sub-row before blockage: [" 
+            //          + std::to_string(sub_start) + ", " + std::to_string(sub_end) + "]");
+            
+            // Ensure sub-row boundaries are site-aligned
+            // sub_start: ceil to next site boundary
+            double relative_start = sub_start - row_start_x;
+            int start_site_offset = static_cast<int>(std::ceil(relative_start / site_width));
+            sub_start = row_start_x + start_site_offset * site_width;
+            
+            // sub_end: floor to previous site boundary  
+            double relative_end = sub_end - row_start_x;
+            int end_site_offset = static_cast<int>(std::floor(relative_end / site_width));
+            sub_end = row_start_x + end_site_offset * site_width;
+            
+            // Logger::log("    After site alignment: [" 
+                    //  + std::to_string(sub_start) + ", " + std::to_string(sub_end) + "]");
+            
+            if (sub_end > sub_start) {
+                sub_rows.emplace_back(row_index, sub_start, sub_end, y, height, site_width);
+                // Logger::log(" - Created sub-row " + std::to_string(sub_rows.size() - 1));
+            } else {
+                // Logger::log(" - Too small, skipped");
             }
         }
-        current_s_x = static_cast<double>(interval.second);
+        current_x = interval.second;
     }
-
-    if (current_s_x < static_cast<double>(row_end_x)) {
-        double sub_start = current_s_x;
-        double sub_end = static_cast<double>(row_end_x);
-
-        double rel_start = sub_start - row_start_x;
-        int start_site_offset = static_cast<int>(std::ceil(rel_start / site_width));
-        sub_start = static_cast<double>(row_start_x) + start_site_offset * site_width;
+    
+    // Create sub-row after the last blockage (if any space left)
+    if (current_x < row_end_x) {
+        double sub_start = current_x;
+        double sub_end = row_end_x;
         
-        // row_end_x is already site aligned: row_start_x + num_sites * site_width
-        // No need to realign sub_end if it's row_end_x
-
-        if (sub_end > sub_start + 1e-9) {
+        // Logger::log("  Trying to create sub-row after last blockage: [" 
+                //  + std::to_string(sub_start) + ", " + std::to_string(sub_end) + "]");
+        
+        // Ensure sub-row boundaries are site-aligned
+        // sub_start: ceil to next site boundary
+        double relative_start = sub_start - row_start_x;
+        int start_site_offset = static_cast<int>(std::ceil(relative_start / site_width));
+        sub_start = row_start_x + start_site_offset * site_width;
+        
+        // sub_end: should already be site-aligned (end_x = start_x + site_width * num_sites)
+        // but apply floor for consistency
+        double relative_end = sub_end - row_start_x;
+        int end_site_offset = static_cast<int>(std::floor(relative_end / site_width));
+        sub_end = row_start_x + end_site_offset * site_width;
+        
+        // Logger::log("    After site alignment: [" 
+                //  + std::to_string(sub_start) + ", " + std::to_string(sub_end) + "]");
+        
+        if (sub_end > sub_start) {
             sub_rows.emplace_back(row_index, sub_start, sub_end, y, height, site_width);
+            // Logger::log(" - Created sub-row " + std::to_string(sub_rows.size() - 1));
+        } else {
+            // Logger::log(" - Too small, skipped");
         }
     }
+    
+    // Logger::log("  Total sub-rows created: " + std::to_string(sub_rows.size()));
 }
 
 // PlacementData methods
 void PlacementData::initialize_sub_row_pointers() {
     all_sub_rows.clear();
-    for (size_t i = 0; i < rows.size(); ++i) {
-        for (size_t j = 0; j < rows[i].sub_rows.size(); ++j) {
-            all_sub_rows.push_back(&rows[i].sub_rows[j]);
+    for (auto& row : rows) {
+        for (auto& sub_row : row.sub_rows) {
+            all_sub_rows.push_back(&sub_row);
         }
     }
-     // Assign IDs to cells
-    for(size_t i=0; i < cells.size(); ++i) {
-        cells[i].id = i;
+    
+    // Logger::log("Initialized " + std::to_string(all_sub_rows.size()) + " sub-row pointers:");
+    for (int i = 0; i < static_cast<int>(all_sub_rows.size()); ++i) {
+        // Logger::log("  Sub-row " + std::to_string(i) + ": y=" + std::to_string(all_sub_rows[i]->y) 
+                //  + ", x_range=[" + std::to_string(all_sub_rows[i]->start_x) 
+                //  + ", " + std::to_string(all_sub_rows[i]->end_x) 
+                //  + "], sites=" + std::to_string(all_sub_rows[i]->available_sites));
     }
 }
 
 bool PlacementData::violates_max_displacement(int cell_index) const {
     if (cell_index < 0 || cell_index >= static_cast<int>(cells.size())) {
-        return true; // Or handle error
+        return true;
     }
     return cells[cell_index].get_displacement() > max_displacement_constraint;
 }
@@ -150,7 +211,6 @@ double PlacementData::calculate_total_displacement() const {
 
 double PlacementData::calculate_max_displacement() const {
     double max_disp = 0.0;
-    if (cells.empty()) return 0.0;
     for (const auto& cell : cells) {
         max_disp = std::max(max_disp, cell.get_displacement());
     }
@@ -158,11 +218,43 @@ double PlacementData::calculate_max_displacement() const {
 }
 
 int PlacementData::get_sub_row_containing_cell(int cell_index) const {
-    for (size_t i = 0; i < all_sub_rows.size(); ++i) {
-        const auto& sub_row_cells = all_sub_rows[i]->cells;
-        if (std::find(sub_row_cells.begin(), sub_row_cells.end(), cell_index) != sub_row_cells.end()) {
+    for (int i = 0; i < static_cast<int>(all_sub_rows.size()); ++i) {
+        const auto& sub_row = *all_sub_rows[i];
+        if (std::find(sub_row.cells.begin(), sub_row.cells.end(), cell_index) != sub_row.cells.end()) {
             return i;
         }
     }
-    return -1;
+    return -1;  // Cell not found in any sub-row
+}
+
+std::unique_ptr<SubRow> SubRow::clone() const {
+    auto cloned = std::make_unique<SubRow>(parent_row_index, start_x, end_x, y, height, site_width);
+    cloned->cells = cells;
+    cloned->available_sites = available_sites;
+    
+    // Deep copy the cluster chain
+    if (last_cluster) {
+        std::vector<Cluster::ptr> clusters;
+        Cluster::ptr current = last_cluster;
+        
+        // Collect all clusters in reverse order (from last to first)
+        while (current) {
+            clusters.push_back(current);
+            current = current->predecessor;
+        }
+        
+        // Rebuild the cluster chain in forward order
+        Cluster::ptr prev_cloned = nullptr;
+        for (auto it = clusters.rbegin(); it != clusters.rend(); ++it) {
+            auto cloned_cluster = std::make_shared<Cluster>((*it)->x, prev_cloned);
+            cloned_cluster->total_weight = (*it)->total_weight;
+            cloned_cluster->total_width = (*it)->total_width;
+            cloned_cluster->q_value = (*it)->q_value;
+            cloned_cluster->member = (*it)->member;
+            prev_cloned = cloned_cluster;
+        }
+        cloned->last_cluster = prev_cloned;
+    }
+    
+    return cloned;
 }
