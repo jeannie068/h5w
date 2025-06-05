@@ -3,10 +3,12 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include "parser/parser.hpp"
 #include "legalizer/abacus_legalizer.hpp"
 #include "Logger.hpp"
 
+// Modified main.cpp section for running legalization
 int main(int argc, char* argv[]) {
     // Check command line arguments
     if (argc != 3) {
@@ -40,11 +42,15 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "  - Total sub-rows (after blockage handling): " << total_sub_rows << std::endl;
     
+    // Determine if this is a large dataset
+    bool is_large_dataset = data.cells.size() >= 220000;
+    if (is_large_dataset) {
+        std::cout << "  - Large dataset detected, using optimized settings" << std::endl;
+    }
+    
     // Run legalization
     std::cout << "\nRunning Abacus legalization..." << std::endl;
     auto start_time = std::chrono::high_resolution_clock::now();
-
-    Logger::init();
     
     AbacusLegalizer legalizer;
     bool success = legalizer.legalize(data);
@@ -68,6 +74,11 @@ int main(int argc, char* argv[]) {
     std::cout << "  - Total displacement: " << static_cast<int>(total_displacement) << std::endl;
     std::cout << "  - Max displacement: " << static_cast<int>(max_displacement) << std::endl;
     
+    // Check if max displacement constraint is satisfied
+    if (max_displacement > data.max_displacement_constraint) {
+        std::cout << "  WARNING: Max displacement constraint violated!" << std::endl;
+    }
+    
     // Write output file
     std::cout << "\nWriting output file: " << output_file << std::endl;
     if (!Parser::write_output_file(output_file, data)) {
@@ -76,6 +87,7 @@ int main(int argc, char* argv[]) {
     }
     
     std::cout << "Output file written successfully!" << std::endl;
+    
     
     return 0;
 }

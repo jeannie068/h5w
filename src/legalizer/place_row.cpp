@@ -1,9 +1,88 @@
-// place_row.cpp - Modified version with incremental clustering
+// place_row.cpp - Modified key functions
 #include "place_row.hpp"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stack>
+
+Cluster::ptr PlaceRow::collapse_cluster_incremental(Cluster::ptr cluster,
+                                                   double sub_row_start_x, 
+                                                   double sub_row_end_x,
+                                                   int site_width) {
+    while (cluster) {
+        // Calculate optimal position
+        cluster->x = cluster->q_value / cluster->total_weight;
+        
+        // Limit position within sub-row boundaries
+        if (cluster->x < sub_row_start_x) {
+            cluster->x = sub_row_start_x;
+        }
+        if (cluster->x > sub_row_end_x - cluster->total_width) {
+            cluster->x = sub_row_end_x - cluster->total_width;
+        }
+        
+        // Check overlap with predecessor
+        Cluster::ptr prev = cluster->predecessor;
+        if (prev && prev->x + prev->total_width > cluster->x) {
+            // Merge with predecessor
+            prev->member.insert(prev->member.end(), cluster->member.begin(), cluster->member.end());
+            prev->total_weight += cluster->total_weight;
+            prev->q_value += cluster->q_value - cluster->total_weight * prev->total_width;
+            prev->total_width += cluster->total_width;
+            
+            cluster = prev;
+        } else {
+            break;
+        }
+    }
+    
+    return cluster;
+}
+
+bool PlaceRow::check_cluster_constraints_with_site_alignment(
+    Cluster::ptr cluster,
+    const std::vector<Cell>& cells,
+    double max_displacement_constraint,
+    int sub_row_y,
+    double sub_row_start_x,
+    int site_width,
+    bool add_penalty) {
+    
+    if (!add_penalty || !cluster) {
+        return true;
+    }
+    
+    // Collect all clusters that might have been affected
+    std::vector<Cluster::ptr> affected_clusters;
+    Cluster::ptr current = cluster;
+    while (current) {
+        affected_clusters.push_back(current);
+        current = current->predecessor;
+    }
+    
+    // Check constraints for all cells in affected clusters
+    for (auto it = affected_clusters.rbegin(); it != affected_clusters.rend(); ++it) {
+        Cluster::ptr clust = *it;
+        
+        // Get site-aligned position for this cluster
+        double site_aligned_x = get_site_x(clust->x, sub_row_start_x, site_width);
+        double x = site_aligned_x;
+        
+        for (int cell_idx : clust->member) {
+            double dx = x - cells[cell_idx].original_x;
+            double dy = sub_row_y - cells[cell_idx].original_y;
+            double displacement = std::sqrt(dx * dx + dy * dy);
+            
+            if (displacement > max_displacement_constraint) {
+                return false;
+            }
+            
+            x += cells[cell_idx].width;
+        }
+    }
+    
+    return true;
+}
 
 PlacementResult PlaceRow::place_row_incremental_trial(SubRow* sub_row, int new_cell_index,
                                                      const std::vector<Cell>& cells, 
@@ -18,6 +97,11 @@ PlacementResult PlaceRow::place_row_incremental_trial(SubRow* sub_row, int new_c
     }
     
     const Cell& new_cell = cells[new_cell_index];
+    
+    // Check free width first
+    if (new_cell.width > sub_row->free_width) {
+        return result;
+    }
     
     // Adjust cell position to be within sub-row bounds
     double cell_x = new_cell.original_x;
@@ -72,12 +156,13 @@ PlacementResult PlaceRow::place_row_incremental_trial(SubRow* sub_row, int new_c
         // Collapse clusters
         trial_last_cluster = collapse_cluster_incremental(trial_last_cluster, 
                                                          sub_row->start_x, 
-                                                         sub_row->end_x);
+                                                         sub_row->end_x,
+                                                         sub_row->site_width);
         
-        // Check constraints if add_penalty is true
-        if (add_penalty && !check_cluster_constraints(trial_last_cluster, cells, 
-                                                      max_displacement_constraint, 
-                                                      sub_row->y, true)) {
+        // Check constraints with site alignment if add_penalty is true
+        if (add_penalty && !check_cluster_constraints_with_site_alignment(
+                trial_last_cluster, cells, max_displacement_constraint, 
+                sub_row->y, sub_row->start_x, sub_row->site_width, true)) {
             result.valid = false;
             return result;
         }
@@ -85,10 +170,14 @@ PlacementResult PlaceRow::place_row_incremental_trial(SubRow* sub_row, int new_c
         result.modified_last_cluster = trial_last_cluster;
     }
     
-    // Convert clusters to positions
-    clusters_to_positions(result.modified_last_cluster, result.cell_positions, cells);
+    // Calculate cell positions with site alignment
+    positions_from_clusters_with_site_alignment(result.modified_last_cluster, 
+                                               result.cell_positions, 
+                                               cells, 
+                                               sub_row->start_x, 
+                                               sub_row->site_width);
     
-    // Calculate cost for new cell and validate all constraints
+    // Validate result and calculate cost for new cell
     result.valid = true;
     for (const auto& pos : result.cell_positions) {
         int cell_idx = pos.first;
@@ -129,6 +218,9 @@ void PlaceRow::place_row_incremental_final(SubRow* sub_row, int new_cell_index,
     
     const Cell& new_cell = cells[new_cell_index];
     
+    // Update free width
+    sub_row->free_width -= new_cell.width;
+    
     // Adjust cell position to be within sub-row bounds
     double cell_x = new_cell.original_x;
     if (cell_x < sub_row->start_x) {
@@ -155,95 +247,24 @@ void PlaceRow::place_row_incremental_final(SubRow* sub_row, int new_cell_index,
         // Collapse clusters
         sub_row->last_cluster = collapse_cluster_incremental(sub_row->last_cluster,
                                                             sub_row->start_x,
-                                                            sub_row->end_x);
+                                                            sub_row->end_x,
+                                                            sub_row->site_width);
     }
     
-    // Apply positions to cells
+    // Apply positions to cells with site alignment
     for (const auto& pos : result.cell_positions) {
         cells[pos.first].current_x = pos.second;
         cells[pos.first].current_y = sub_row->y;
     }
 }
 
-Cluster::ptr PlaceRow::collapse_cluster_incremental(Cluster::ptr cluster,
-                                                   double sub_row_start_x, 
-                                                   double sub_row_end_x) {
-    while (cluster) {
-        // Calculate optimal position
-        cluster->x = cluster->q_value / cluster->total_weight;
-        
-        // Limit position within sub-row boundaries
-        if (cluster->x < sub_row_start_x) {
-            cluster->x = sub_row_start_x;
-        }
-        if (cluster->x > sub_row_end_x - cluster->total_width) {
-            cluster->x = sub_row_end_x - cluster->total_width;
-        }
-        
-        // Check overlap with predecessor
-        Cluster::ptr prev = cluster->predecessor;
-        if (prev && prev->x + prev->total_width > cluster->x) {
-            // Merge with predecessor
-            prev->member.insert(prev->member.end(), cluster->member.begin(), cluster->member.end());
-            prev->total_weight += cluster->total_weight;
-            prev->q_value += cluster->q_value - cluster->total_weight * prev->total_width;
-            prev->total_width += cluster->total_width;
-            
-            cluster = prev;
-        } else {
-            break;
-        }
-    }
+void PlaceRow::positions_from_clusters_with_site_alignment(
+    Cluster::ptr last_cluster,
+    std::vector<std::pair<int, double>>& positions,
+    const std::vector<Cell>& cells,
+    double sub_row_start_x,
+    int site_width) {
     
-    return cluster;
-}
-
-bool PlaceRow::check_cluster_constraints(Cluster::ptr cluster,
-                                        const std::vector<Cell>& cells,
-                                        double max_displacement_constraint,
-                                        int sub_row_y,
-                                        bool add_penalty) {
-    if (!add_penalty || !cluster) {
-        return true;
-    }
-    
-    // Collect all clusters that might have been affected
-    std::vector<Cluster::ptr> affected_clusters;
-    Cluster::ptr current = cluster;
-    while (current) {
-        affected_clusters.push_back(current);
-        current = current->predecessor;
-    }
-    
-    // Check constraints for all cells in affected clusters
-    for (auto it = affected_clusters.rbegin(); it != affected_clusters.rend(); ++it) {
-        Cluster::ptr clust = *it;
-        double x = clust->x;
-        
-        for (int cell_idx : clust->member) {
-            double dx = x - cells[cell_idx].original_x;
-            double dy = sub_row_y - cells[cell_idx].original_y;
-            double displacement = std::sqrt(dx * dx + dy * dy);
-            
-            if (displacement > max_displacement_constraint) {
-                return false;
-            }
-            
-            x += cells[cell_idx].width;
-        }
-    }
-    
-    return true;
-}
-
-double PlaceRow::get_site_x(double x, double min_x, int site_width) {
-    double shift_x = x - min_x;
-    return min_x + std::round(shift_x / site_width) * site_width;
-}
-
-void PlaceRow::clusters_to_positions(Cluster::ptr last_cluster,
-                                    std::vector<std::pair<int, double>>& positions,
-                                    const std::vector<Cell>& cells) {
     positions.clear();
     
     // Collect all clusters
@@ -257,7 +278,9 @@ void PlaceRow::clusters_to_positions(Cluster::ptr last_cluster,
     // Process clusters in forward order (reverse of collection order)
     for (auto it = clusters.rbegin(); it != clusters.rend(); ++it) {
         Cluster::ptr cluster = *it;
-        double x = cluster->x;
+        
+        // Get site-aligned position for cluster start
+        double x = get_site_x(cluster->x, sub_row_start_x, site_width);
         
         for (int cell_idx : cluster->member) {
             positions.push_back({cell_idx, x});
@@ -266,46 +289,7 @@ void PlaceRow::clusters_to_positions(Cluster::ptr last_cluster,
     }
 }
 
-// Keep the original place_row_trial as fallback/comparison
-PlacementResult PlaceRow::place_row_trial(SubRow* sub_row, int new_cell_index,
-                                         const std::vector<Cell>& cells, 
-                                         double max_displacement_constraint,
-                                         bool add_penalty) {
-    // ... (original implementation remains for fallback) ...
-    PlacementResult result;
-    result.valid = false;
-    result.cost = std::numeric_limits<double>::infinity();
-    
-    if (!sub_row) {
-        return result;
-    }
-    
-    // Get all cells in this sub-row including the new one
-    std::vector<int> cell_indices = sub_row->cells;
-    
-    // Add new cell to the list for trial
-    cell_indices.push_back(new_cell_index);
-    
-    // Sort cells by their original x position
-    std::sort(cell_indices.begin(), cell_indices.end(),
-              [&cells](int a, int b) {
-                  return cells[a].original_x < cells[b].original_x;
-              });
-    
-    // ... (rest of original implementation) ...
-    return result;
-}
-
-void PlaceRow::place_row_final(SubRow* sub_row, const PlacementResult& result,
-                              std::vector<Cell>& cells) {
-    // ... (original implementation remains) ...
-    if (!result.valid || !sub_row) {
-        return;
-    }
-    
-    // Apply the calculated positions
-    for (const auto& pos : result.cell_positions) {
-        cells[pos.first].current_x = pos.second;
-        cells[pos.first].current_y = sub_row->y;
-    }
+double PlaceRow::get_site_x(double x, double min_x, int site_width) {
+    double shift_x = x - min_x;
+    return min_x + std::round(shift_x / site_width) * site_width;
 }

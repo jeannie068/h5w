@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <iomanip>
 
 // Modified try_place_cell_trial to use incremental placement
 PlacementResult AbacusLegalizer::try_place_cell_trial(int cell_index, SubRow* sub_row,
@@ -13,23 +14,8 @@ PlacementResult AbacusLegalizer::try_place_cell_trial(int cell_index, SubRow* su
     result.valid = false;
     result.cost = std::numeric_limits<double>::infinity();
     
-    // Check if cell width can fit in sub-row considering site alignment
-    int cell_sites_needed = static_cast<int>(std::ceil(static_cast<double>(data.cells[cell_index].width) / 
-                                                       sub_row->site_width));
-    
-    // Calculate current used sites
-    int used_sites = 0;
-    for (int idx : sub_row->cells) {
-        int sites = static_cast<int>(std::ceil(static_cast<double>(data.cells[idx].width) / 
-                                               sub_row->site_width));
-        used_sites += sites;
-    }
-    
-    int available_sites = static_cast<int>((sub_row->end_x - sub_row->start_x) / sub_row->site_width);
-    int remaining_sites = available_sites - used_sites;
-    
-    // Check if cell can fit in terms of sites
-    if (cell_sites_needed > remaining_sites) {
+    // Quick check: if cell width exceeds free width, skip
+    if (data.cells[cell_index].width > sub_row->free_width) {
         return result;
     }
     
@@ -48,25 +34,27 @@ bool AbacusLegalizer::legalize(PlacementData& data) {
     bool found_valid_solution = false;
     double best_total_displacement = std::numeric_limits<double>::infinity();
 
-    int max_dir_num = (data.cells.size() < 220000) ? 2 : 1; // Use both directions for smaller datasets, only one for larger
+    // For large datasets, only try one direction to save time
+    int max_dir_num = (data.cells.size() < 220000) ? 2 : 1;
     
     for (int sort_dir = 0; sort_dir < max_dir_num; ++sort_dir) {
         std::cout << "\n--- Trying sort direction: " << (sort_dir == 0 ? "ascending" : "descending") << " ---" << std::endl;
         
         PlacementData current_data = data;
         
-        // Initialize all sub-rows' last_cluster to nullptr
+        // Initialize all sub-rows' last_cluster to nullptr and reset free_width
         for (auto& row : current_data.rows) {
             for (auto& sub_row : row.sub_rows) {
                 sub_row.last_cluster = nullptr;
                 sub_row.cells.clear();
+                sub_row.free_width = static_cast<int>(sub_row.end_x - sub_row.start_x);
             }
         }
         
         bool success = true;
         
         // Sort cells by x coordinate
-        std::vector<int> cell_order = sort_cells_by_x(current_data.cells, sort_dir);
+        std::vector<int> cell_order = sort_cells_by_x(current_data.cells, sort_dir == 0);
         
         // Legalize each cell one by one
         for (int i = 0; i < static_cast<int>(cell_order.size()); ++i) {
@@ -142,17 +130,19 @@ bool AbacusLegalizer::legalize(PlacementData& data) {
                 PlaceRow::place_row_incremental_final(best_sub_row, cell_idx, 
                                                      current_data.cells, best_result);
                 current_data.cells[cell_idx].is_legalized = true;
+                
             } else {
+                std::cout << "  Failed to place cell " << current_data.cells[cell_idx].name 
+                          << " (index: " << cell_idx << ")" << std::endl;
                 success = false;
                 break;
             }
         }
         
         if (success) {
-            std::cout << "\nApplying site alignment..." << std::endl;
-            apply_site_alignment_all(current_data);
-            
+            // No need for separate site alignment - it's done during placement
             double total_disp = current_data.calculate_total_displacement();
+            std::cout << "  Total displacement: " << total_disp << std::endl;
             
             if (total_disp < best_total_displacement) {
                 best_total_displacement = total_disp;
@@ -163,10 +153,12 @@ bool AbacusLegalizer::legalize(PlacementData& data) {
     }
     
     if (!found_valid_solution) {
+        std::cout << "Legalization failed!" << std::endl;
         return false;
     }
     
     data = best_data;
+    std::cout << "Best total displacement: " << best_total_displacement << std::endl;
     return true;
 }
 
@@ -182,9 +174,21 @@ std::pair<SubRow*, PlacementResult> AbacusLegalizer::find_best_sub_row_in_row(
     // Get sub-rows for this row
     std::vector<SubRow*> sub_rows = get_sub_rows_for_row(data, row_idx);
     
-    // Sort sub-rows by their distance to cell's x position for better pruning
+    // Filter sub-rows by free width first
     const Cell& cell = data.cells[cell_idx];
-    std::sort(sub_rows.begin(), sub_rows.end(), 
+    std::vector<SubRow*> candidate_sub_rows;
+    for (SubRow* sub_row : sub_rows) {
+        if (cell.width <= sub_row->free_width) {
+            candidate_sub_rows.push_back(sub_row);
+        }
+    }
+    
+    if (candidate_sub_rows.empty()) {
+        return {best_sub_row, best_result};
+    }
+    
+    // Sort candidate sub-rows by their distance to cell's x position
+    std::sort(candidate_sub_rows.begin(), candidate_sub_rows.end(), 
         [&cell](SubRow* a, SubRow* b) {
             double dist_a = 0;
             if (cell.original_x < a->start_x) {
@@ -203,8 +207,8 @@ std::pair<SubRow*, PlacementResult> AbacusLegalizer::find_best_sub_row_in_row(
             return dist_a < dist_b;
         });
     
-    // Try each sub-row
-    for (SubRow* sub_row : sub_rows) {
+    // Try each candidate sub-row
+    for (SubRow* sub_row : candidate_sub_rows) {
         PlacementResult result = try_place_cell_trial(cell_idx, sub_row, data, 
                                                      current_best_cost, add_penalty);
         
@@ -302,13 +306,14 @@ double AbacusLegalizer::calculate_lower_bound_cost(const Cell& cell, const SubRo
     return std::abs(sub_row.y - cell.original_y);
 }
 
+// Fixed sort_cells_by_x function in abacus_legalizer.cpp
 std::vector<int> AbacusLegalizer::sort_cells_by_x(const std::vector<Cell>& cells, bool ascending) {
     std::vector<int> indices(cells.size());
     for (int i = 0; i < static_cast<int>(cells.size()); ++i) {
         indices[i] = i;
     }
     
-    if (!ascending) {
+    if (ascending) {
         std::sort(indices.begin(), indices.end(),
                   [&cells](int a, int b) {
                       return cells[a].original_x < cells[b].original_x;

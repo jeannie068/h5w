@@ -1,4 +1,4 @@
-// place_row.hpp - Modified version with incremental clustering
+// place_row.hpp - Modified version
 #ifndef PLACE_ROW_HPP
 #define PLACE_ROW_HPP
 
@@ -31,36 +31,33 @@ public:
                                           std::vector<Cell>& cells,
                                           const PlacementResult& result);
     
-    // Legacy trial mode (for comparison/fallback)
-    static PlacementResult place_row_trial(SubRow* sub_row, int new_cell_index,
-                                          const std::vector<Cell>& cells, 
-                                          double max_displacement_constraint,
-                                          bool add_penalty = true);
-    
-    // Legacy final mode
-    static void place_row_final(SubRow* sub_row, const PlacementResult& result,
-                               std::vector<Cell>& cells);
+    // Get site-aligned x position
+    static double get_site_x(double x, double min_x, int site_width);
 
 private:
     // Helper function for incremental cluster collapse
     static Cluster::ptr collapse_cluster_incremental(Cluster::ptr cluster,
                                                     double sub_row_start_x, 
-                                                    double sub_row_end_x);
+                                                    double sub_row_end_x,
+                                                    int site_width);
     
-    // Check if cluster violates constraints after collapse
-    static bool check_cluster_constraints(Cluster::ptr cluster,
-                                        const std::vector<Cell>& cells,
-                                        double max_displacement_constraint,
-                                        int sub_row_y,
-                                        bool add_penalty);
+    // Check if cluster violates constraints after collapse with site alignment
+    static bool check_cluster_constraints_with_site_alignment(
+        Cluster::ptr cluster,
+        const std::vector<Cell>& cells,
+        double max_displacement_constraint,
+        int sub_row_y,
+        double sub_row_start_x,
+        int site_width,
+        bool add_penalty);
     
-    // Get site-aligned x position
-    static double get_site_x(double x, double min_x, int site_width);
-    
-    // Convert clusters to cell positions
-    static void clusters_to_positions(Cluster::ptr last_cluster,
-                                    std::vector<std::pair<int, double>>& positions,
-                                    const std::vector<Cell>& cells);
+    // Convert clusters to cell positions with site alignment
+    static void positions_from_clusters_with_site_alignment(
+        Cluster::ptr last_cluster,
+        std::vector<std::pair<int, double>>& positions,
+        const std::vector<Cell>& cells,
+        double sub_row_start_x,
+        int site_width);
 };
 
 #endif // PLACE_ROW_HPP

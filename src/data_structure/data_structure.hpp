@@ -62,6 +62,7 @@ struct Blockage {
     bool overlaps_row_horizontally(int start_x, int end_x) const;
 };
 
+// Modified SubRow structure in data_structure.hpp
 struct SubRow {
     int parent_row_index;
     double start_x;
@@ -71,6 +72,7 @@ struct SubRow {
     int site_width;
     std::vector<int> cells;  // indices of cells in this sub-row
     int available_sites;
+    int free_width;  // Add free width tracking like reference implementation
     
     // For incremental cluster management
     Cluster::ptr last_cluster;   // The rightmost cluster in this sub-row
@@ -79,6 +81,7 @@ struct SubRow {
         : parent_row_index(parent_idx), start_x(sx), end_x(ex), 
           y(row_y), height(row_h), site_width(sw), last_cluster(nullptr) {
         available_sites = static_cast<int>((end_x - start_x) / site_width);
+        free_width = static_cast<int>(end_x - start_x);  // Initialize free width
     }
     
     // Check if a cell can fit in this sub-row

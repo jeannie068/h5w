@@ -227,10 +227,12 @@ int PlacementData::get_sub_row_containing_cell(int cell_index) const {
     return -1;  // Cell not found in any sub-row
 }
 
+// Modified SubRow::clone() method in data_structure.cpp
 std::unique_ptr<SubRow> SubRow::clone() const {
     auto cloned = std::make_unique<SubRow>(parent_row_index, start_x, end_x, y, height, site_width);
     cloned->cells = cells;
     cloned->available_sites = available_sites;
+    cloned->free_width = free_width;  // Add free_width copying
     
     // Deep copy the cluster chain
     if (last_cluster) {
