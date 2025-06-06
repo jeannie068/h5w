@@ -1,4 +1,4 @@
-// place_row.hpp - Modified version
+// Final place_row.hpp
 #ifndef PLACE_ROW_HPP
 #define PLACE_ROW_HPP
 
@@ -20,13 +20,13 @@ public:
     // Floating point comparison epsilon
     static constexpr double EPSILON = 1e-9;
     
-    // Incremental trial mode - calculates positions using existing clusters
+    // Incremental trial mode - calculates positions without modifying cluster state
     static PlacementResult place_row_incremental_trial(SubRow* sub_row, int new_cell_index, 
                                                       const std::vector<Cell>& cells, 
                                                       double max_displacement_constraint,
                                                       bool add_penalty = true);
     
-    // Final mode - actually places cells and updates cluster state
+    // Final mode - actually modifies cluster state
     static void place_row_incremental_final(SubRow* sub_row, int new_cell_index,
                                           std::vector<Cell>& cells,
                                           const PlacementResult& result);
@@ -40,24 +40,6 @@ private:
                                                     double sub_row_start_x, 
                                                     double sub_row_end_x,
                                                     int site_width);
-    
-    // Check if cluster violates constraints after collapse with site alignment
-    static bool check_cluster_constraints_with_site_alignment(
-        Cluster::ptr cluster,
-        const std::vector<Cell>& cells,
-        double max_displacement_constraint,
-        int sub_row_y,
-        double sub_row_start_x,
-        int site_width,
-        bool add_penalty);
-    
-    // Convert clusters to cell positions with site alignment
-    static void positions_from_clusters_with_site_alignment(
-        Cluster::ptr last_cluster,
-        std::vector<std::pair<int, double>>& positions,
-        const std::vector<Cell>& cells,
-        double sub_row_start_x,
-        int site_width);
 };
 
 #endif // PLACE_ROW_HPP

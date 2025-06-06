@@ -5,6 +5,158 @@
 #include <iostream>
 #include <stack>
 
+// Fixed place_row_incremental_trial in place_row.cpp
+
+PlacementResult PlaceRow::place_row_incremental_trial(SubRow* sub_row, int new_cell_index,
+                                                     const std::vector<Cell>& cells, 
+                                                     double max_displacement_constraint,
+                                                     bool add_penalty) {
+    PlacementResult result;
+    result.valid = false;
+    result.cost = std::numeric_limits<double>::infinity();
+    
+    if (!sub_row) {
+        return result;
+    }
+    
+    const Cell& new_cell = cells[new_cell_index];
+    
+    // Quick check: free width first
+    if (new_cell.width > sub_row->free_width) {
+        return result;
+    }
+    
+    // Adjust cell position to be within sub-row bounds
+    double cell_x = new_cell.original_x;
+    if (cell_x < sub_row->start_x) {
+        cell_x = sub_row->start_x;
+    } else if (cell_x > sub_row->end_x - new_cell.width) {
+        cell_x = sub_row->end_x - new_cell.width;
+    }
+    
+    // Simple case: no existing clusters or new cell doesn't overlap
+    if (!sub_row->last_cluster || sub_row->last_cluster->x + sub_row->last_cluster->total_width <= cell_x) {
+        // Cell will be placed at cell_x (after site alignment)
+        double site_aligned_x = get_site_x(cell_x, sub_row->start_x, sub_row->site_width);
+        
+        // Calculate displacement
+        double dx = site_aligned_x - new_cell.original_x;
+        double dy = sub_row->y - new_cell.original_y;
+        double displacement = std::sqrt(dx * dx + dy * dy);
+        
+        // Check constraint if add_penalty is true
+        if (add_penalty && displacement > max_displacement_constraint) {
+            return result;
+        }
+        
+        result.cost = displacement;
+        result.valid = true;
+        result.cell_positions.push_back({new_cell_index, site_aligned_x});
+        return result;
+    }
+    
+    // Complex case: need to handle cluster collapse
+    // Create temporary cluster state (following reference implementation approach)
+    std::vector<Cluster::ptr> cluster_stack;
+    Cluster::ptr current = sub_row->last_cluster;
+    
+    // Simulate adding cell to last cluster
+    int cluster_weight = current->total_weight + new_cell.weight;
+    double cluster_q = current->q_value + new_cell.weight * (cell_x - current->total_width);
+    int cluster_width = current->total_width + new_cell.width;
+    
+    // Collapse clusters (following reference implementation logic)
+    while (true) {
+        cluster_stack.push_back(current);
+        
+        double cluster_x = cluster_q / cluster_weight;
+        if (cluster_x < sub_row->start_x) {
+            cluster_x = sub_row->start_x;
+        }
+        if (cluster_x > sub_row->end_x - cluster_width) {
+            cluster_x = sub_row->end_x - cluster_width;
+        }
+        
+        Cluster::ptr prev = current->predecessor;
+        if (prev && prev->x + prev->total_width > cluster_x) {
+            // Merge with predecessor
+            cluster_q = prev->q_value + cluster_q - cluster_weight * prev->total_width;
+            cluster_weight = prev->total_weight + cluster_weight;
+            cluster_width = prev->total_width + cluster_width;
+            current = prev;
+        } else {
+            // No more collapsing needed
+            // Now calculate positions and check constraints
+            
+            // Get all clusters that are not affected
+            std::vector<Cluster::ptr> unaffected_clusters;
+            Cluster::ptr temp = sub_row->last_cluster;
+            while (temp && temp != current) {
+                temp = temp->predecessor;
+            }
+            if (temp) {
+                temp = temp->predecessor;
+                while (temp) {
+                    unaffected_clusters.push_back(temp);
+                    temp = temp->predecessor;
+                }
+            }
+            
+            // Calculate positions for all cells
+            result.cell_positions.clear();
+            
+            // First, unaffected clusters (in reverse order)
+            for (auto it = unaffected_clusters.rbegin(); it != unaffected_clusters.rend(); ++it) {
+                double x = get_site_x((*it)->x, sub_row->start_x, sub_row->site_width);
+                for (int cell_idx : (*it)->member) {
+                    result.cell_positions.push_back({cell_idx, x});
+                    x += cells[cell_idx].width;
+                }
+            }
+            
+            // Then, affected clusters
+            double x = get_site_x(cluster_x, sub_row->start_x, sub_row->site_width);
+            
+            // Process clusters from bottom to top of stack
+            for (auto it = cluster_stack.rbegin(); it != cluster_stack.rend(); ++it) {
+                for (int cell_idx : (*it)->member) {
+                    result.cell_positions.push_back({cell_idx, x});
+                    
+                    if (add_penalty) {
+                        double dx = x - cells[cell_idx].original_x;
+                        double dy = sub_row->y - cells[cell_idx].original_y;
+                        double disp = std::sqrt(dx * dx + dy * dy);
+                        if (disp > max_displacement_constraint) {
+                            // Constraint violated
+                            result.valid = false;
+                            return result;
+                        }
+                    }
+                    
+                    x += cells[cell_idx].width;
+                }
+            }
+            
+            // Add new cell
+            result.cell_positions.push_back({new_cell_index, x});
+            double dx = x - new_cell.original_x;
+            double dy = sub_row->y - new_cell.original_y;
+            double displacement = std::sqrt(dx * dx + dy * dy);
+            
+            if (add_penalty && displacement > max_displacement_constraint) {
+                result.valid = false;
+                return result;
+            }
+            
+            result.cost = displacement;
+            result.valid = true;
+            break;
+        }
+    }
+    
+    return result;
+}
+
 Cluster::ptr PlaceRow::collapse_cluster_incremental(Cluster::ptr cluster,
                                                    double sub_row_start_x, 
                                                    double sub_row_end_x,
@@ -39,175 +191,7 @@ Cluster::ptr PlaceRow::collapse_cluster_incremental(Cluster::ptr cluster,
     return cluster;
 }
 
-bool PlaceRow::check_cluster_constraints_with_site_alignment(
-    Cluster::ptr cluster,
-    const std::vector<Cell>& cells,
-    double max_displacement_constraint,
-    int sub_row_y,
-    double sub_row_start_x,
-    int site_width,
-    bool add_penalty) {
-    
-    if (!add_penalty || !cluster) {
-        return true;
-    }
-    
-    // Collect all clusters that might have been affected
-    std::vector<Cluster::ptr> affected_clusters;
-    Cluster::ptr current = cluster;
-    while (current) {
-        affected_clusters.push_back(current);
-        current = current->predecessor;
-    }
-    
-    // Check constraints for all cells in affected clusters
-    for (auto it = affected_clusters.rbegin(); it != affected_clusters.rend(); ++it) {
-        Cluster::ptr clust = *it;
-        
-        // Get site-aligned position for this cluster
-        double site_aligned_x = get_site_x(clust->x, sub_row_start_x, site_width);
-        double x = site_aligned_x;
-        
-        for (int cell_idx : clust->member) {
-            double dx = x - cells[cell_idx].original_x;
-            double dy = sub_row_y - cells[cell_idx].original_y;
-            double displacement = std::sqrt(dx * dx + dy * dy);
-            
-            if (displacement > max_displacement_constraint) {
-                return false;
-            }
-            
-            x += cells[cell_idx].width;
-        }
-    }
-    
-    return true;
-}
-
-PlacementResult PlaceRow::place_row_incremental_trial(SubRow* sub_row, int new_cell_index,
-                                                     const std::vector<Cell>& cells, 
-                                                     double max_displacement_constraint,
-                                                     bool add_penalty) {
-    PlacementResult result;
-    result.valid = false;
-    result.cost = std::numeric_limits<double>::infinity();
-    
-    if (!sub_row) {
-        return result;
-    }
-    
-    const Cell& new_cell = cells[new_cell_index];
-    
-    // Check free width first
-    if (new_cell.width > sub_row->free_width) {
-        return result;
-    }
-    
-    // Adjust cell position to be within sub-row bounds
-    double cell_x = new_cell.original_x;
-    if (cell_x < sub_row->start_x) {
-        cell_x = sub_row->start_x;
-    } else if (cell_x > sub_row->end_x - new_cell.width) {
-        cell_x = sub_row->end_x - new_cell.width;
-    }
-    
-    // Work with a copy of the cluster chain for trial
-    Cluster::ptr trial_last_cluster = nullptr;
-    if (sub_row->last_cluster) {
-        // Deep copy the cluster chain
-        std::vector<Cluster::ptr> clusters;
-        Cluster::ptr current = sub_row->last_cluster;
-        
-        while (current) {
-            clusters.push_back(current);
-            current = current->predecessor;
-        }
-        
-        Cluster::ptr prev_cloned = nullptr;
-        for (auto it = clusters.rbegin(); it != clusters.rend(); ++it) {
-            auto cloned = std::make_shared<Cluster>((*it)->x, prev_cloned);
-            cloned->total_weight = (*it)->total_weight;
-            cloned->total_width = (*it)->total_width;
-            cloned->q_value = (*it)->q_value;
-            cloned->member = (*it)->member;
-            prev_cloned = cloned;
-        }
-        trial_last_cluster = prev_cloned;
-    }
-    
-    // Check if new cell overlaps with last cluster
-    if (!trial_last_cluster || trial_last_cluster->x + trial_last_cluster->total_width <= cell_x) {
-        // Create new independent cluster
-        auto new_cluster = std::make_shared<Cluster>(cell_x, trial_last_cluster);
-        new_cluster->member.push_back(new_cell_index);
-        new_cluster->total_weight = new_cell.weight;
-        new_cluster->q_value = new_cell.weight * cell_x;
-        new_cluster->total_width = new_cell.width;
-        new_cluster->x = cell_x;
-        
-        result.modified_last_cluster = new_cluster;
-    } else {
-        // Add cell to last cluster
-        trial_last_cluster->member.push_back(new_cell_index);
-        trial_last_cluster->total_weight += new_cell.weight;
-        trial_last_cluster->q_value += new_cell.weight * (cell_x - trial_last_cluster->total_width);
-        trial_last_cluster->total_width += new_cell.width;
-        
-        // Collapse clusters
-        trial_last_cluster = collapse_cluster_incremental(trial_last_cluster, 
-                                                         sub_row->start_x, 
-                                                         sub_row->end_x,
-                                                         sub_row->site_width);
-        
-        // Check constraints with site alignment if add_penalty is true
-        if (add_penalty && !check_cluster_constraints_with_site_alignment(
-                trial_last_cluster, cells, max_displacement_constraint, 
-                sub_row->y, sub_row->start_x, sub_row->site_width, true)) {
-            result.valid = false;
-            return result;
-        }
-        
-        result.modified_last_cluster = trial_last_cluster;
-    }
-    
-    // Calculate cell positions with site alignment
-    positions_from_clusters_with_site_alignment(result.modified_last_cluster, 
-                                               result.cell_positions, 
-                                               cells, 
-                                               sub_row->start_x, 
-                                               sub_row->site_width);
-    
-    // Validate result and calculate cost for new cell
-    result.valid = true;
-    for (const auto& pos : result.cell_positions) {
-        int cell_idx = pos.first;
-        double x = pos.second;
-        
-        // Check boundaries
-        if (x < sub_row->start_x - EPSILON || 
-            x + cells[cell_idx].width > sub_row->end_x + EPSILON) {
-            result.valid = false;
-            return result;
-        }
-        
-        // Check displacement constraint
-        double dx = x - cells[cell_idx].original_x;
-        double dy = sub_row->y - cells[cell_idx].original_y;
-        double displacement = std::sqrt(dx * dx + dy * dy);
-        
-        if (displacement > max_displacement_constraint) {
-            result.valid = false;
-            return result;
-        }
-        
-        // Cost for new cell
-        if (cell_idx == new_cell_index) {
-            result.cost = displacement;
-        }
-    }
-    
-    return result;
-}
+// Fixed place_row_incremental_final in place_row.cpp
 
 void PlaceRow::place_row_incremental_final(SubRow* sub_row, int new_cell_index,
                                           std::vector<Cell>& cells,
@@ -229,67 +213,62 @@ void PlaceRow::place_row_incremental_final(SubRow* sub_row, int new_cell_index,
         cell_x = sub_row->end_x - new_cell.width;
     }
     
-    // Update the actual cluster state
-    if (!sub_row->last_cluster || sub_row->last_cluster->x + sub_row->last_cluster->total_width <= cell_x) {
+    // Update the actual cluster state (following reference's placeRowFinal)
+    Cluster::ptr cluster = sub_row->last_cluster;
+    
+    if (!cluster || cluster->x + cluster->total_width <= cell_x) {
         // Create new independent cluster
-        sub_row->last_cluster = std::make_shared<Cluster>(cell_x, sub_row->last_cluster);
-        sub_row->last_cluster->member.push_back(new_cell_index);
-        sub_row->last_cluster->total_weight = new_cell.weight;
-        sub_row->last_cluster->q_value = new_cell.weight * cell_x;
-        sub_row->last_cluster->total_width = new_cell.width;
+        sub_row->last_cluster = std::make_shared<Cluster>(cell_x, cluster);
+        cluster = sub_row->last_cluster;
+        
+        // Add cell
+        cluster->member.push_back(new_cell_index);
+        cluster->total_weight = new_cell.weight;
+        cluster->q_value = new_cell.weight * cell_x;
+        cluster->total_width = new_cell.width;
     } else {
         // Add cell to last cluster
-        sub_row->last_cluster->member.push_back(new_cell_index);
-        sub_row->last_cluster->total_weight += new_cell.weight;
-        sub_row->last_cluster->q_value += new_cell.weight * (cell_x - sub_row->last_cluster->total_width);
-        sub_row->last_cluster->total_width += new_cell.width;
+        cluster->member.push_back(new_cell_index);
+        cluster->total_weight += new_cell.weight;
+        cluster->q_value += new_cell.weight * (cell_x - cluster->total_width);
+        cluster->total_width += new_cell.width;
         
         // Collapse clusters
-        sub_row->last_cluster = collapse_cluster_incremental(sub_row->last_cluster,
-                                                            sub_row->start_x,
-                                                            sub_row->end_x,
-                                                            sub_row->site_width);
+        while (true) {
+            cluster->x = cluster->q_value / cluster->total_weight;
+            
+            if (cluster->x < sub_row->start_x) {
+                cluster->x = sub_row->start_x;
+            }
+            if (cluster->x > sub_row->end_x - cluster->total_width) {
+                cluster->x = sub_row->end_x - cluster->total_width;
+            }
+            
+            Cluster::ptr prev_cluster = cluster->predecessor;
+            if (prev_cluster && prev_cluster->x + prev_cluster->total_width > cluster->x) {
+                // Merge clusters
+                prev_cluster->member.insert(prev_cluster->member.end(), 
+                                          cluster->member.begin(), 
+                                          cluster->member.end());
+                prev_cluster->total_weight += cluster->total_weight;
+                prev_cluster->q_value += cluster->q_value - cluster->total_weight * prev_cluster->total_width;
+                prev_cluster->total_width += cluster->total_width;
+                
+                cluster = prev_cluster;
+            } else {
+                break;
+            }
+        }
+        
+        sub_row->last_cluster = cluster;
     }
     
-    // Apply positions to cells with site alignment
-    for (const auto& pos : result.cell_positions) {
-        cells[pos.first].current_x = pos.second;
-        cells[pos.first].current_y = sub_row->y;
-    }
+    // Note: We don't update cell positions here - that's done in determine_final_positions
 }
 
-void PlaceRow::positions_from_clusters_with_site_alignment(
-    Cluster::ptr last_cluster,
-    std::vector<std::pair<int, double>>& positions,
-    const std::vector<Cell>& cells,
-    double sub_row_start_x,
-    int site_width) {
-    
-    positions.clear();
-    
-    // Collect all clusters
-    std::vector<Cluster::ptr> clusters;
-    Cluster::ptr current = last_cluster;
-    while (current) {
-        clusters.push_back(current);
-        current = current->predecessor;
-    }
-    
-    // Process clusters in forward order (reverse of collection order)
-    for (auto it = clusters.rbegin(); it != clusters.rend(); ++it) {
-        Cluster::ptr cluster = *it;
-        
-        // Get site-aligned position for cluster start
-        double x = get_site_x(cluster->x, sub_row_start_x, site_width);
-        
-        for (int cell_idx : cluster->member) {
-            positions.push_back({cell_idx, x});
-            x += cells[cell_idx].width;
-        }
-    }
-}
 
 double PlaceRow::get_site_x(double x, double min_x, int site_width) {
+    // Following reference implementation's getSiteX
     double shift_x = x - min_x;
     return min_x + std::round(shift_x / site_width) * site_width;
 }
