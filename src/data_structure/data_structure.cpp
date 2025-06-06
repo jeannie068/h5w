@@ -226,37 +226,3 @@ int PlacementData::get_sub_row_containing_cell(int cell_index) const {
     }
     return -1;  // Cell not found in any sub-row
 }
-
-// Modified SubRow::clone() method in data_structure.cpp
-std::unique_ptr<SubRow> SubRow::clone() const {
-    auto cloned = std::make_unique<SubRow>(parent_row_index, start_x, end_x, y, height, site_width);
-    cloned->cells = cells;
-    cloned->available_sites = available_sites;
-    cloned->free_width = free_width;  // Add free_width copying
-    
-    // Deep copy the cluster chain
-    if (last_cluster) {
-        std::vector<Cluster::ptr> clusters;
-        Cluster::ptr current = last_cluster;
-        
-        // Collect all clusters in reverse order (from last to first)
-        while (current) {
-            clusters.push_back(current);
-            current = current->predecessor;
-        }
-        
-        // Rebuild the cluster chain in forward order
-        Cluster::ptr prev_cloned = nullptr;
-        for (auto it = clusters.rbegin(); it != clusters.rend(); ++it) {
-            auto cloned_cluster = std::make_shared<Cluster>((*it)->x, prev_cloned);
-            cloned_cluster->total_weight = (*it)->total_weight;
-            cloned_cluster->total_width = (*it)->total_width;
-            cloned_cluster->q_value = (*it)->q_value;
-            cloned_cluster->member = (*it)->member;
-            prev_cloned = cloned_cluster;
-        }
-        cloned->last_cluster = prev_cloned;
-    }
-    
-    return cloned;
-}

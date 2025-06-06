@@ -1,45 +1,29 @@
-// Final place_row.hpp
+// Simplified place_row.hpp - matching reference implementation style
 #ifndef PLACE_ROW_HPP
 #define PLACE_ROW_HPP
 
 #include "../data_structure/data_structure.hpp"
 #include <vector>
-
-// Structure to hold placement result for trial mode
-struct PlacementResult {
-    bool valid;
-    double cost;  // Displacement of the new cell
-    std::vector<std::pair<int, double>> cell_positions;  // cell_index, x_position pairs
-    
-    // For incremental clustering, store the modified cluster state
-    Cluster::ptr modified_last_cluster;  
-};
+#include <utility>
 
 class PlaceRow {
 public:
-    // Floating point comparison epsilon
-    static constexpr double EPSILON = 1e-9;
-    
-    // Incremental trial mode - calculates positions without modifying cluster state
-    static PlacementResult place_row_incremental_trial(SubRow* sub_row, int new_cell_index, 
-                                                      const std::vector<Cell>& cells, 
-                                                      double max_displacement_constraint,
-                                                      bool add_penalty = true);
+    // Trial mode - returns (isValid, cost) pair like reference
+    // isValid: -1 if failed, >= 0 if successful
+    // cost: displacement of the new cell
+    static std::pair<int, double> place_row_trial(SubRow* sub_row, 
+                                                  Cell* new_cell,
+                                                  const std::vector<Cell>& cells,
+                                                  double max_displacement_constraint,
+                                                  bool add_penalty);
     
     // Final mode - actually modifies cluster state
-    static void place_row_incremental_final(SubRow* sub_row, int new_cell_index,
-                                          std::vector<Cell>& cells,
-                                          const PlacementResult& result);
+    static void place_row_final(SubRow* sub_row, 
+                               Cell* new_cell,
+                               std::vector<Cell>& cells);
     
     // Get site-aligned x position
     static double get_site_x(double x, double min_x, int site_width);
-
-private:
-    // Helper function for incremental cluster collapse
-    static Cluster::ptr collapse_cluster_incremental(Cluster::ptr cluster,
-                                                    double sub_row_start_x, 
-                                                    double sub_row_end_x,
-                                                    int site_width);
 };
 
 #endif // PLACE_ROW_HPP

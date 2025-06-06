@@ -1,5 +1,5 @@
 CXX      := g++
-CXXFLAGS := -std=c++17 -g -O0 -Wall -Wextra -MMD
+CXXFLAGS := -std=c++17 -O3 -Wall -Wextra -MMD
 LIBS     := -lm
 EXEC     := ../bin/hw5
 SRC_DIRS := .\

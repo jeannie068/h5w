@@ -72,7 +72,7 @@ struct SubRow {
     int site_width;
     std::vector<int> cells;  // indices of cells in this sub-row
     int available_sites;
-    int free_width;  // Add free width tracking like reference implementation
+    int free_width;  // Track free width
     
     // For incremental cluster management
     Cluster::ptr last_cluster;   // The rightmost cluster in this sub-row
@@ -81,7 +81,7 @@ struct SubRow {
         : parent_row_index(parent_idx), start_x(sx), end_x(ex), 
           y(row_y), height(row_h), site_width(sw), last_cluster(nullptr) {
         available_sites = static_cast<int>((end_x - start_x) / site_width);
-        free_width = static_cast<int>(end_x - start_x);  // Initialize free width
+        free_width = static_cast<int>(end_x - start_x);
     }
     
     // Check if a cell can fit in this sub-row
@@ -96,8 +96,7 @@ struct SubRow {
     // Remove cell from this sub-row
     void remove_cell(int cell_index);
     
-    // Clone this sub-row for trial purposes
-    std::unique_ptr<SubRow> clone() const;
+    // Remove the clone function - not needed
 };
 
 struct Row {

@@ -1,4 +1,4 @@
-// Updated abacus_legalizer.hpp
+// Simplified abacus_legalizer.hpp
 #ifndef ABACUS_LEGALIZER_HPP
 #define ABACUS_LEGALIZER_HPP
 
@@ -20,28 +20,13 @@ private:
     // Find the nearest row to a cell
     int find_nearest_row(const Cell& cell, const PlacementData& data);
     
-    // Calculate lower bound cost for placing a cell in a sub-row (vertical movement only)
-    double calculate_lower_bound_cost(const Cell& cell, const SubRow& sub_row);
-    
-    // Try to place a cell in a specific sub-row using trial mode
-    PlacementResult try_place_cell_trial(int cell_index, SubRow* sub_row, 
-                                       const PlacementData& data, 
-                                       double current_best_cost,
-                                       bool add_penalty = true);
+    // Try to place a cell in a specific row, returns (sub_row_idx, cost)
+    std::pair<int, double> try_place_in_row(Cell* cell, int row_idx, 
+                                            const PlacementData& data, 
+                                            bool add_penalty);
     
     // Determine final positions for all cells (site alignment)
     void determine_final_positions(PlacementData& data);
-    
-    // Get the index of a sub-row in the all_sub_rows vector
-    int get_sub_row_index(SubRow* sub_row, const PlacementData& data);
-    
-    // Get sub-rows for a specific row
-    std::vector<SubRow*> get_sub_rows_for_row(const PlacementData& data, int row_idx);
-    
-    // Find best sub-row within a row
-    std::pair<SubRow*, PlacementResult> find_best_sub_row_in_row(
-        int cell_idx, int row_idx, const PlacementData& data, 
-        double current_best_cost, bool add_penalty);
 };
 
 #endif // ABACUS_LEGALIZER_HPP
